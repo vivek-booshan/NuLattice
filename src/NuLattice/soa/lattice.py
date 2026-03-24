@@ -1,7 +1,11 @@
-from .constants import HBARC, MASS
+from itertools import combinations
+from typing import Tuple
 
-# old types
-from ._types import (
+import numpy as np
+
+from NuLattice.constants import HBARC, MASS
+from NuLattice._types import (
+    # old types
     LatticeState,
     LatticeSite,
     LatticeSites,
@@ -9,14 +13,12 @@ from ._types import (
     TwoBodyElement,
     ThreeBodyElement,
     SingleParticleBasis,
+    # new types
+    OneBodyOperator,
+    TwoBodyOperator,
+    ThreeBodyOperator,
 )
 
-# new types
-from ._types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
-
-import numpy as np
-from itertools import combinations
-from typing import Tuple
 
 
 def phys_unit(a_lat: float) -> float:
@@ -78,6 +80,7 @@ def state2index(state: LatticeState, myL: int, spin: int = 2, isospin: int = 2) 
         + state[4]
     )
 
+
 def site2index(site: LatticeSite, myL: int) -> int:
     """
     given a site list [i,j,k] this function returns the index of that state in the list
@@ -95,6 +98,7 @@ def site2index(site: LatticeSite, myL: int) -> int:
     k = site[2]
     index = i * myL**2 + j * myL + k
     return index
+
 
 def get_lattice(myL: int) -> LatticeSites:
     """
@@ -250,7 +254,7 @@ def _contacts(
 
     # mixed channel (Tz=0, Sz=0)
     # indx1 in (indx3, indx4) check:
-    is_diag = p == r # p < q and r < s, p must match r or s. 
+    is_diag = p == r  # p < q and r < s, p must match r or s.
     values[mixed_mask & is_diag] = (vS1 + vT1) * 0.5
     values[mixed_mask & ~is_diag] = (vS1 - vT1) * 0.5
 
@@ -343,13 +347,14 @@ def NNNcontact(
     return op
 
 
-def to_legacy_p(op:OneBodyOperator):
+def to_legacy_p(op: OneBodyOperator):
     res = np.empty((len(op), 3), dtype=object)
     res[:, 0] = op.indices[:, 0]
     res[:, 1] = op.indices[:, 1]
     res[:, 2] = op.values
 
     return res
+
 
 def _p(
     lattice_sites: LatticeSites, myL: int, dim: int, spin: int = 2, isospin: int = 2

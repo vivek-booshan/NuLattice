@@ -5,12 +5,12 @@ import pathlib
 sys.path.append(str(pathlib.Path(__file__).parent / ".."))
 
 
-import NuLattice.HF.soa.hartree_fock as hf
-import NuLattice.lattice_soa as lat
+import NuLattice.soa.hf.hartree_fock as hf
+import NuLattice.soa.lattice as lat
 import NuLattice.references as ref
 import torch
 
-device = torch.device('cuda')
+device = torch.device('cpu')
 # Initialize lattice
 thisL = 4  # L*L*L lattice
 a_lat = 2.5  # lattice spacing in fm

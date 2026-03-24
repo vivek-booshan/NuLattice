@@ -1,7 +1,7 @@
 import torch
 
 from NuLattice._torch_types import TwoBodyOperator, ThreeBodyOperator
-import NuLattice.lattice as lat
+import NuLattice.soa.lattice as lat
 
 from . import ccDgrams as dgrams
 from . import three_body_utils as tbu

@@ -1,9 +1,9 @@
 import argparse
 import torch
 
-import NuLattice.lattice_soa as lat
+import NuLattice.soa.lattice as lat
 import NuLattice.references as ref
-import NuLattice.CCM.soa.coupled_cluster as ccm
+import NuLattice.soa.ccm.coupled_cluster as ccm
 
 device = torch.device('cuda')
 
