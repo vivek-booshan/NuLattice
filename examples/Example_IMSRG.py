@@ -6,12 +6,10 @@ import argparse
 import sys
 import matplotlib.pyplot as plt
 
-import NuLattice.lattice as lat
 from NuLattice.constants import ReferenceState
-from NuLattice.IMSRG import normal_ordering
-from NuLattice.IMSRG import ode_solver
+from NuLattice.solver import IMSRGSolver
 
-def main():
+def parse():
     parser = argparse.ArgumentParser(description="Run a NuLattice IMSRG(2) calculation.")
 
     parser.add_argument("--L", type=int, default=2, help="Lattice size L (L*L*L)")
@@ -28,18 +26,10 @@ def main():
                         help="Reference state key (e.g., HE3, HE4, C12)")
 
     args = parser.parse_args()
+    return args
 
-    # Setup Lattice Environment
-    phys_unit = lat.phys_unit(args.a_lat)
-    basis = lat.get_sp_basis(args.L)
-    lattice = lat.get_lattice(args.L)
-
-    print(f"Lattice: {args.L}^3 | Spacing: {args.a_lat} fm")
-
-    # Kinetic energy and potential matrix elements
-    kin = lat.Tkin(lattice, args.L)
-    contact_nn = lat.contacts(args.vT1, args.vS1, lattice, args.L)
-    contact_3n = lat.NNNcontact(args.cE, lattice, args.L)
+def main():
+    args = parse()
 
     try:
         ref_state = getattr(ReferenceState, f"{args.element.upper()}_GS")
@@ -47,21 +37,11 @@ def main():
         print(f"Error: Reference state for '{args.element}' not found in constants.")
         sys.exit(1)
 
-    occs = normal_ordering.create_occupations(basis, ref_state)
-    e0, f, gamma = normal_ordering.compute_normal_ordered_hamiltonian_no2b(
-        occs, kin, contact_nn, contact_3n
-    )
-
-    print(f"Initial E0: {e0 * phys_unit:.4f} MeV")
-
-    e_imsrg, integration_data = ode_solver.solve_imsrg2(
-        occs, e0, f, gamma, 
-        s_max=args.s_max, 
-        eta_criterion=args.eta_crit
-    )
+    solver = IMSRGSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE)
+    e_imsrg, integration_data = solver.solve(args.s_max, args.eta_crit)
 
     print("-" * 30)
-    print(f"Final IMSRG Energy: {e_imsrg * phys_unit:.6f} MeV")
+    print(f"Final IMSRG Energy: {e_imsrg * solver.phys_unit:.6f} MeV")
     print(f"Energy (Lattice Units): {e_imsrg:.6f}")
 
     if args.plot:

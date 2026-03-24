@@ -7,7 +7,7 @@ import NuLattice.HF.hartree_fock as hf
 import NuLattice.lattice as lat
 from NuLattice.constants import ReferenceState
 
-def main():
+def parse():
     parser = argparse.ArgumentParser(description="Run a NuLattice Hartree-Fock calculation.")
 
     parser.add_argument("--L", type=int, default=8, help="Lattice size L (L*L*L)")
@@ -26,50 +26,25 @@ def main():
                         help="Reference state key (e.g., O16, C12, HE4)")
 
     args = parser.parse_args()
+    return args
 
-    phys_unit = lat.phys_unit(args.a_lat)
-    my_basis = lat.get_sp_basis(args.L)
-    lattice = lat.get_lattice(args.L)
-    
-    nstat = len(my_basis)
-    nsite = len(lattice)
+def main():
+    args = parse()
 
-    print(f"Lattice: {args.L}^3 | Spacing: {args.a_lat} fm")
-    print(f"SP States: {nstat} | Lattice Sites: {nsite}")
-
-    myTkin = lat.Tkin(lattice, args.L)
-    mycontact = lat.contacts(args.vT1, args.vS1, lattice, args.L)
-    my3body = lat.NNNcontact(args.cE, lattice, args.L)
-
-    print(f"Matrix elements - Tkin: {len(myTkin)}, 2-body: {len(mycontact)}, 3-body: {len(my3body)}")
-
+    from NuLattice.solver import HFSolver
     try:
         attr_name = f"{args.element.upper()}_GS"
-        my_ref = getattr(ReferenceState, attr_name)
+        ref_state = getattr(ReferenceState, attr_name)
     except AttributeError:
         print(f"Error: Reference state for '{args.element}' not found.")
         sys.exit(1)
 
-    hole = ReferenceState.holes(my_ref, my_basis)
-    hnum = len(hole)
-
-    dens = hf.init_density(nstat, hole)
-    print(f"Target Particle Number: {hnum} | Initial Trace: {np.trace(dens)}")
-
-    erg, trafo, conv = hf.solve_HF(
-        myTkin,
-        mycontact,
-        my3body,
-        dens,
-        mix=args.mix,
-        eps=args.eps,
-        max_iter=args.max_iter,
-        verbose=args.verbose,
-    )
+    solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE)
+    erg, trafo, conv = solver.solve(ref_state, args.eps, args.mix, args.max_iter, args.verbose)
 
     print("-" * 30)
     if conv:
-        final_energy = erg * phys_unit
+        final_energy = erg * solver.phys_unit
         print("HF Convergence: SUCCESS")
         print(f"Final HF Energy: {final_energy:.6f} MeV")
     else:
