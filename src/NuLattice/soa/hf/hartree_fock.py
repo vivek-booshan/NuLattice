@@ -12,7 +12,7 @@ import torch
 from typing import Tuple
 
 try:
-    from NuLattice._types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
+    from NuLattice._torch_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
 except ImportError:
     OneBodyOperator = TwoBodyOperator = ThreeBodyOperator = None
 
@@ -195,11 +195,12 @@ def solve_HF(
     torch._dynamo.mark_dynamic(op3.indices, 0)
 
     nstat = dens.shape[0]
+    device = dens.device
     _dens = dens.clone() 
-    gamma_buf = torch.zeros((nstat, nstat), dtype=torch.float64)
-    omega_buf = torch.zeros((nstat, nstat), dtype=torch.float64)
-    ham_buf = torch.zeros((nstat, nstat), dtype=torch.float64)
-    dens_buf = torch.zeros((nstat, nstat), dtype=torch.float64)
+    gamma_buf = torch.zeros((nstat, nstat), dtype=torch.float64, device=device)
+    omega_buf = torch.zeros((nstat, nstat), dtype=torch.float64, device=device)
+    ham_buf = torch.zeros((nstat, nstat), dtype=torch.float64, device=device)
+    dens_buf = torch.zeros((nstat, nstat), dtype=torch.float64, device=device)
     
     h1_dense = op1.to_dense()
 
