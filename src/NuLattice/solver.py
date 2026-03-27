@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import NuLattice.lattice as lat
 from NuLattice.constants import ReferenceState
 
 @dataclass(frozen=True, slots=True)
@@ -62,10 +61,19 @@ class Coupling:
 
 
 class BaseSolver:
-    def __init__(self, L, a_lat, state, vT1, vS1, cE):
+    def __init__(self, L, a_lat, state, vT1, vS1, cE, backend="cpu"):
+        self.backend = backend
         self.L = L
         self.a_lat = a_lat
         self.state = state
+
+        if backend == "cpu":
+            import NuLattice.lattice as lat
+        if backend == "torch":
+            import NuLattice.soa.lattice as lat
+        if backend == "jax":
+            import NuLattice.jax.lattice as lat
+
         self.coupling = Coupling(vT1, vS1, cE)
 
         self.phys_unit = lat.phys_unit(a_lat)
@@ -94,9 +102,19 @@ class CCMSolver(BaseSolver):
         sparse=True,
         verbose=True,
         NO2B=True,
+        backend="cpu"
     ):
+        if self.backend == "cpu":
+            from NuLattice.CCM.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+        elif self.backend == "torch":
+            from NuLattice.soa.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+        elif self.backend == "jax":
+            raise NotImplementedError()
+            # from NuLattice.jax.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+        else:
+            raise ValueError("Unknown backend. Select <cpu|torch|jax>")
 
-        from NuLattice.CCM.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+
         refEn, fock, v2_no = get_norm_ordered_ham(
             self.L,
             self.state,
@@ -124,7 +142,14 @@ class CCMSolver(BaseSolver):
 
 class HFSolver(BaseSolver):
     def solve(self, eps=1e-8, mix=0.7, max_iter=100, verbose=False):
-        import NuLattice.HF.hartree_fock as hf
+        if self.backend == "cpu":
+            import NuLattice.HF.hartree_fock as hf
+        elif self.backend == "torch":
+            import NuLattice.soa.hf.hartree_fock as hf
+        elif self.backend == "jax":
+            import NuLattice.jax.hf.hartree_fock as hf
+        else:
+            raise ValueError("Unknown backend. Select <cpu|torch|jax>")
 
         nstat = len(self.basis)
         hole = ReferenceState.holes(self.state, self.basis)

@@ -1,11 +1,8 @@
 import argparse
 import sys
-
-import numpy as np
-
-import NuLattice.HF.hartree_fock as hf
-import NuLattice.lattice as lat
+from NuLattice.solver import HFSolver
 from NuLattice.constants import ReferenceState
+
 
 def parse():
     parser = argparse.ArgumentParser(description="Run a NuLattice Hartree-Fock calculation.")
@@ -24,6 +21,7 @@ def parse():
 
     parser.add_argument("--element", type=str, default="O16", 
                         help="Reference state key (e.g., O16, C12, HE4)")
+    parser.add_argument("--backend", type=str, default="cpu", help="backend")
 
     args = parser.parse_args()
     return args
@@ -31,7 +29,6 @@ def parse():
 def main():
     args = parse()
 
-    from NuLattice.solver import HFSolver
     try:
         attr_name = f"{args.element.upper()}_GS"
         ref_state = getattr(ReferenceState, attr_name)
@@ -39,8 +36,8 @@ def main():
         print(f"Error: Reference state for '{args.element}' not found.")
         sys.exit(1)
 
-    solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE)
-    erg, trafo, conv = solver.solve(ref_state, args.eps, args.mix, args.max_iter, args.verbose)
+    solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend="jax")
+    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose)
 
     print("-" * 30)
     if conv:
