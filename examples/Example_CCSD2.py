@@ -1,5 +1,6 @@
 import argparse
 
+
 import NuLattice.references as ref
 from NuLattice.solver import CCMSolver
 
@@ -22,6 +23,7 @@ def parse():
     parser.add_argument("--delta", type=float, default=0.0, help="Energy shift to avoid division by zero")
     parser.add_argument("--sparse", action="store_false", default=True, help="Disable sparse matrices (defaults to True)")
     parser.add_argument("--quiet", action="store_false", dest="verbose", default=True, help="Suppress iteration output")
+    parser.add_argument("--backend", type=str, default="cpu", help="Backend: <cpu|torch|jax>")
 
     args = parser.parse_args()
     return args
@@ -30,8 +32,20 @@ def parse():
 def main():
 
     args = parse()
+    if args.backend == "jax":
+        import os
+        os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+        os.environ["JAX_DEFAULT_MATMUL_PRECISION"] = "highest"
+        import jax
+        jax.config.update("jax_enable_x64", True)
+
     ref_state = ref.ref_16O_gs
-    solver = CCMSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE)
+    solver = CCMSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
+        
+    print(f"Lattice: {solver.L}^3 | Spacing: {solver.a_lat} fm")
+    print(f"Number of single-particle states = {len(solver.basis)}")
+    print(f"Number of lattice sites = {len(solver.lattice)}")
+
     refEn, corrEn, t1, t2 = solver.solve(
         mixing=args.mixing,
         eps=args.eps,
