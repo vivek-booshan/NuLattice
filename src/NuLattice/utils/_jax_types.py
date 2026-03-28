@@ -16,6 +16,36 @@ class Operator:
     def to_dense(self):
         raise NotImplementedError
 
+    def to_list(self):
+        if len(self) == 0:
+            return []
+
+        out_list = []
+        for i in range(len(self.values)):
+            row = self.indices[i].tolist()
+            row.append(self.values[i])
+            out_list.append(row)
+        return out_list
+
+    @classmethod
+    def from_list(
+        cls, operator_list, nstat: int,
+    ):
+        """Operator from a legacy list of lists [[p, q, ..., val], ...]"""
+        if not operator_list:
+            rank = cls._get_expected_rank()
+            return cls(
+                jnp.empty((0, rank), dtype=jnp.int32),
+                jnp.empty((0,), dtype=jnp.float64),
+                nstat,
+            )
+
+        data = jnp.array(operator_list, dtype=jnp.float64)
+        indices = jnp.round(data[:, :-1]).astype(jnp.int32)
+        values = data[:, -1]
+
+        return cls(indices, values, nstat)
+
 class OneBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
         super().__init__(indices, values, nstat)
