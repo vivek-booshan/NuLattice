@@ -1,10 +1,10 @@
 import torch
 from typing import Tuple, Callable, Iterable
-from . import torch_generator as generator
-from . import torch_commutator as commutators
+from . import generator
+from . import commutator
 
 # fuse the 9 kernels together
-evaluate_imsrg2_commutator = torch.compile(commutators.evaluate_imsrg2_commutator)
+evaluate_imsrg2_commutator = torch.compile(commutator.evaluate_imsrg2_commutator)
 
 # --- DOPRI5 CONSTANTS (The Butcher Tableau) ---
 # Hardcoded for performance
