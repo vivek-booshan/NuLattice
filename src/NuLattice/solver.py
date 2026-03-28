@@ -109,8 +109,8 @@ class CCMSolver(BaseSolver):
         elif self.backend == "torch":
             from NuLattice.soa.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
         elif self.backend == "jax":
-            raise NotImplementedError()
-            # from NuLattice.jax.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+            # raise NotImplementedError()
+            from NuLattice.jax.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
         else:
             raise ValueError("Unknown backend. Select <cpu|torch|jax>")
 
