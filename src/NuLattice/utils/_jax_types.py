@@ -1,4 +1,9 @@
+import jax
 import jax.numpy as jnp
+from jax.experimental.sparse import BCOO
+from jax.experimental import mesh_utils
+from jax.sharding import NamedSharding, PartitionSpec as P, Mesh
+
 
 class Operator:
     def __init__(self, indices: jnp.ndarray, values: jnp.ndarray, nstat: int):
@@ -6,15 +11,12 @@ class Operator:
         # JAX arrays are the primary backend here
         self.indices = jnp.asarray(indices, dtype=jnp.int32)
         self.values = jnp.asarray(values)
-        
+
         if self.indices.ndim == 1:
             self.indices = self.indices[:, jnp.newaxis]
 
     def __len__(self):
         return len(self.values)
-
-    def to_dense(self):
-        raise NotImplementedError
 
     def to_list(self):
         if len(self) == 0:
@@ -27,9 +29,35 @@ class Operator:
             out_list.append(row)
         return out_list
 
+    def to_bcoo(self, mesh=None):
+        """Converts operator to a JAX BCOO sparse array, optionally sharded."""
+        rank = self._get_expected_rank()
+        shape = (self.nstat,) * rank
+
+        # If a mesh is provided, shard the NNZ dimension
+        if mesh:
+            sharding = NamedSharding(mesh, P("data"))
+            indices = jax.device_put(self.indices, sharding)
+            data = jax.device_put(self.values, sharding)
+            return BCOO((data, indices), shape=shape)
+
+        return BCOO((self.values, self.indices), shape=shape)
+
+    def to_dense(self, mesh=None):
+        rank = self.indices.shape[1]
+        shape = (self.nstat,) * rank
+        mat = jnp.zeros(shape, dtype=self.values.dtype)
+        mat = mat.at[tuple(self.indices[:, i] for i in range(rank))].add(self.values)
+        if mesh:
+            sharding = NamedSharding(mesh, P("data", *((None,) * (rank - 1))))
+            return jax.device_put(mat, sharding)
+        return mat
+
     @classmethod
     def from_list(
-        cls, operator_list, nstat: int,
+        cls,
+        operator_list,
+        nstat: int,
     ):
         """Operator from a legacy list of lists [[p, q, ..., val], ...]"""
         if not operator_list:
@@ -46,6 +74,7 @@ class Operator:
 
         return cls(indices, values, nstat)
 
+
 class OneBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
         super().__init__(indices, values, nstat)
@@ -55,10 +84,6 @@ class OneBodyOperator(Operator):
     @classmethod
     def _get_expected_rank(cls):
         return 2
-
-    def to_dense(self):
-        mat = jnp.zeros((self.nstat, self.nstat), dtype=self.values.dtype)
-        return mat.at[self.indices[:, 0], self.indices[:, 1]].add(self.values)
 
 class TwoBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
@@ -70,12 +95,6 @@ class TwoBodyOperator(Operator):
     def _get_expected_rank(cls):
         return 4
 
-    def to_dense(self):
-        shape = (self.nstat,) * 4
-        mat = jnp.zeros(shape, dtype=self.values.dtype)
-        return mat.at[self.indices[:, 0], self.indices[:, 1], 
-                      self.indices[:, 2], self.indices[:, 3]].add(self.values)
-
 class ThreeBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
         super().__init__(indices, values, nstat)
@@ -86,8 +105,25 @@ class ThreeBodyOperator(Operator):
     def _get_expected_rank(cls):
         return 6
 
-    def to_dense(self):
-        shape = (self.nstat,) * 6
-        mat = jnp.zeros(shape, dtype=self.values.dtype)
-        return mat.at[tuple(self.indices[:, i] for i in range(6))].add(self.values)
+class Chef:
+    def __init__(self):
+        self.devices = mesh_utils.create_device_mesh((len(jax.devices()),))
+        self.mesh = Mesh(self.devices, axis_names=("data",))
+        self.sharding_spec = NamedSharding(self.mesh, P("data"))
 
+    def prepare_operator(self, op):
+        return op.to_bcoo(mesh=self.mesh)
+
+    def prepare_op_dense(self, op):
+        return op.to_dense(mesh=self.mesh)
+
+    def shard_array(self, arr: jnp.array, rank: int = None):
+        r = rank if rank is not None else arr.ndim 
+        if r == 0:
+            spec = P()
+        if r == 1:
+            spec = P('data')
+        else:
+            spec = P("data", *([None] * (r - 1)))
+
+        return jax.device_put(arr, NamedSharding(self.mesh, spec))
