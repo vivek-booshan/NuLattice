@@ -1,6 +1,6 @@
 import torch
 
-from NuLattice._torch_types import TwoBodyOperator, ThreeBodyOperator
+from NuLattice.utils._torch_types import TwoBodyOperator, ThreeBodyOperator
 import NuLattice.soa.lattice as lat
 
 from . import ccDgrams as dgrams
