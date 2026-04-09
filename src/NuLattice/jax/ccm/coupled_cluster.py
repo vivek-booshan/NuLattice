@@ -1,8 +1,9 @@
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding, PartitionSpec as P
 from functools import partial
 
-from NuLattice.utils._jax_types import TwoBodyOperator, ThreeBodyOperator
+from NuLattice.utils._jax_types import TwoBodyOperator, ThreeBodyOperator, Chef
 import NuLattice.soa.lattice as lat
 
 from . import ccDgrams as dgrams
@@ -222,9 +223,9 @@ def t2Iter(
     diag_p = jnp.diag(X_pp)
     denom_hh = diag_h[None, :] + diag_h[:, None]
     denom_pp = diag_p[None, :] + diag_p[:, None]
-    denom = -(denom_pp[:, :, None, None] + denom_hh[None, None, :, :])
+    # denom = -(denom_pp[:, :, None, None] + denom_hh[None, None, :, :])
 
-    return t2 + (H2 / denom)
+    return t2 + (H2 / -(denom_pp[:, :, jnp.newaxis, jnp.newaxis] + denom_hh[jnp.newaxis, jnp.newaxis, :, :]))
 
 
 def ccsd_solver(
@@ -240,6 +241,7 @@ def ccsd_solver(
     sparse=True,
     ccs=False,
     dtype=jnp.float64,
+    chef: Chef = None,
 ):
     f_pp, f_ph, f_hh = [to_tensor(f, dtype) for f in fock_mats]
     v_pppp_in, v_ppph_in, v_pphh, v_phph, v_phhh, v_hhhh = [
@@ -252,6 +254,31 @@ def ccsd_solver(
     else:
         v_pppp, v_ppph = v_pppp_in, v_ppph_in
 
+    if chef is not None:
+        mesh = chef.mesh
+        rep_sharding = NamedSharding(mesh, P())
+        f_pp = jax.device_put(f_pp, rep_sharding)
+        f_ph = jax.device_put(f_ph, rep_sharding)
+        f_hh = jax.device_put(f_hh, rep_sharding)
+
+        v_ppph = jax.device_put(v_ppph, rep_sharding)
+        v_phph = jax.device_put(v_phph, rep_sharding)
+        v_hhhh = jax.device_put(v_hhhh, rep_sharding)
+
+        if sparse:
+            # indices (4, NNZ) -> shard axis 1
+            # values (NNZ, ) -> shard axis 0
+            idx_sharding = NamedSharding(mesh, P(None, 'data'))
+            val_sharding = NamedSharding(mesh, P('data'))
+
+            v_pppp = (
+                jax.device_put(v_pppp[0], idx_sharding), 
+                jax.device_put(v_pppp[1], val_sharding)
+            )
+            v_ppph = (
+                jax.device_put(v_ppph[0], idx_sharding), 
+                jax.device_put(v_ppph[1], val_sharding)
+            )
     t1 = (
         t1Init(f_ph, f_pp, f_hh, delta)
         if t1initial is None

@@ -107,6 +107,7 @@ class ThreeBodyOperator(Operator):
 
 class Chef:
     def __init__(self):
+        # jax.distributed.initialize()
         self.devices = mesh_utils.create_device_mesh((len(jax.devices()),))
         self.mesh = Mesh(self.devices, axis_names=("data",))
         self.sharding_spec = NamedSharding(self.mesh, P("data"))

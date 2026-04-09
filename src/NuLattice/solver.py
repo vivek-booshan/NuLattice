@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from NuLattice.constants import ReferenceState
 
+
 @dataclass(frozen=True, slots=True)
 class Coupling:
     """
@@ -61,7 +62,16 @@ class Coupling:
 
 
 class BaseSolver:
-    def __init__(self, L, a_lat, state, vT1, vS1, cE, backend="cpu"):
+    def __init__(
+        self,
+        L: int,
+        a_lat: float,
+        state,
+        vT1: float,
+        vS1: float,
+        cE: float,
+        backend: str = "cpu",
+    ):
         self.backend = backend
         self.L = L
         self.a_lat = a_lat
@@ -90,6 +100,34 @@ class BaseSolver:
             else None
         )
 
+    def jax_options(
+        self,
+        use_x64: bool = False,
+        preallocate: bool = True,
+        reserve_memory: float = None,
+    ):
+        assert self.backend == "jax", (
+            f"passing jax options, but backend is {self.backend}"
+        )
+
+        if use_x64:
+            import jax
+
+            jax.config.update("jax_enable_x64", True)
+
+        if not preallocate:
+            import os
+
+            os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = False
+
+        if reserve_memory:
+            assert 0.0 < reserve_memory < 1.0, (
+                f"memory fraction must be within (0.0, 1.0], got {reserve_memory}"
+            )
+            import os
+
+            os.Environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = reserve_memory
+
 
 class CCMSolver(BaseSolver):
     def solve(
@@ -102,18 +140,22 @@ class CCMSolver(BaseSolver):
         sparse=True,
         verbose=True,
         NO2B=True,
-        backend="cpu"
+        chef=None,
     ):
         if self.backend == "cpu":
             from NuLattice.CCM.coupled_cluster import get_norm_ordered_ham, ccsd_solver
         elif self.backend == "torch":
-            from NuLattice.soa.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+            from NuLattice.soa.ccm.coupled_cluster import (
+                get_norm_ordered_ham,
+                ccsd_solver,
+            )
         elif self.backend == "jax":
-            # raise NotImplementedError()
-            from NuLattice.jax.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+            from NuLattice.jax.ccm.coupled_cluster import (
+                get_norm_ordered_ham,
+                ccsd_solver,
+            )
         else:
             raise ValueError("Unknown backend. Select <cpu|torch|jax>")
-
 
         refEn, fock, v2_no = get_norm_ordered_ham(
             self.L,
@@ -125,23 +167,45 @@ class CCMSolver(BaseSolver):
             sparse=sparse,
         )
 
-        corrEn, t1, t2 = ccsd_solver(
-            fock,
-            v2_no,
-            eps=eps,
-            maxSteps=maxSteps,
-            max_diis=max_diis,
-            delta=delta,
-            mixing=mixing,
-            sparse=sparse,
-            verbose=verbose,
-            ccs=False,
-        )
+        if self.backend == "jax":
+            corrEn, t1, t2 = ccsd_solver(
+                fock,
+                v2_no,
+                eps=eps,
+                maxSteps=maxSteps,
+                max_diis=max_diis,
+                delta=delta,
+                mixing=mixing,
+                sparse=sparse,
+                verbose=verbose,
+                ccs=False,
+                chef=chef,
+            )
+        else:
+            corrEn, t1, t2 = ccsd_solver(
+                fock,
+                v2_no,
+                eps=eps,
+                maxSteps=maxSteps,
+                max_diis=max_diis,
+                delta=delta,
+                mixing=mixing,
+                sparse=sparse,
+                verbose=verbose,
+                ccs=False,
+            )
         return refEn, corrEn, t1, t2
 
 
 class HFSolver(BaseSolver):
-    def solve(self, eps=1e-8, mix=0.7, max_iter=100, verbose=False):
+    def solve(
+        self,
+        eps: float = 1e-8,
+        mix: float = 0.7,
+        max_iter: float = 100,
+        verbose: float = False,
+        chef=None,
+    ):
         if self.backend == "cpu":
             import NuLattice.HF.hartree_fock as hf
         elif self.backend == "torch":
@@ -155,22 +219,43 @@ class HFSolver(BaseSolver):
         hole = ReferenceState.holes(self.state, self.basis)
         dens = hf.init_density(nstat, hole)
 
-        energy, vecs, conv = hf.solve_HF(
-            self.op1,
-            self.op2,
-            self.op3,
-            dens,
-            mix=mix,
-            eps=eps,
-            max_iter=max_iter,
-            verbose=verbose,
-        )
+        if self.backend == "jax":
+            energy, vecs, conv = hf.solve_HF(
+                self.op1,
+                self.op2,
+                self.op3,
+                dens,
+                mix=mix,
+                eps=eps,
+                max_iter=max_iter,
+                verbose=verbose,
+                chef=chef,
+            )
+        else:
+            energy, vecs, conv = hf.solve_HF(
+                self.op1,
+                self.op2,
+                self.op3,
+                dens,
+                mix=mix,
+                eps=eps,
+                max_iter=max_iter,
+                verbose=verbose,
+            )
         return energy, vecs, conv
 
 
 class IMSRGSolver(BaseSolver):
     def solve(self, s_max=40, eta_crit=1e-3):
-        import NuLattice.IMSRG as imsrg
+        if self.backend == "cpu":
+            import NuLattice.IMSRG as imsrg
+        elif self.backend == "torch":
+            import NuLattice.soa.imsrg as imsrg
+        elif self.backend == "jax":
+            raise NotImplementedError("Not yet implemented")
+            import NuLattice.jax.imsrg as imsrg
+        else:
+            raise ValueError("Unknown backend. Select <cpu|torch|jax>")
 
         occs = imsrg.normal_ordering.create_occupations(self.basis, self.state)
         e0, f, gamma = imsrg.normal_ordering.compute_normal_ordered_hamiltonian_no2b(
