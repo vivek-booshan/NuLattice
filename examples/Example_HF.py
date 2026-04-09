@@ -2,12 +2,13 @@ import argparse
 import sys
 from NuLattice.solver import HFSolver
 from NuLattice.constants import ReferenceState
+from NuLattice.utils._jax_types import Chef
 
 
 def parse():
     parser = argparse.ArgumentParser(description="Run a NuLattice Hartree-Fock calculation.")
 
-    parser.add_argument("--L", type=int, default=8, help="Lattice size L (L*L*L)")
+    parser.add_argument("--L", type=int, default=4, help="Lattice size L (L*L*L)")
     parser.add_argument("--a_lat", type=float, default=2.5, help="Lattice spacing in fm")
     
     parser.add_argument("--vT1", type=float, default=-9.0, help="S-wave isospin-triplet contact")
@@ -36,8 +37,14 @@ def main():
         print(f"Error: Reference state for '{args.element}' not found.")
         sys.exit(1)
 
-    solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend="jax")
-    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose)
+    print(f"Lattice L = {args.L}")
+    if args.backend == "jax":
+        chef = Chef()
+    else:
+        chef = None
+
+    solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
+    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=chef)
 
     print("-" * 30)
     if conv:
