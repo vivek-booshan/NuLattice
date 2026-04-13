@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.sharding import NamedSharding, PartitionSpec as P
 from functools import partial
 
@@ -14,6 +15,7 @@ def to_tensor(arr, dtype=jnp.float64):
     """Helper to convert numpy arrays/lists/Operators to JAX arrays."""
     if isinstance(arr, jnp.ndarray):
         return arr.astype(dtype)
+        # return jnp.array(arr, dtype=dtype)
     if hasattr(arr, "to_dense"):  # Handle OneBodyOperator
         return jnp.array(arr.to_dense(), dtype=dtype)
     return jnp.array(arr, dtype=dtype)
@@ -101,7 +103,6 @@ def get_ref_energy(no_1b_hh, no_2b_hhhh, w_hhh_hhh=None):
 def t1Init(f_ph, f_pp, f_hh, delta):
     diag_h = jnp.diag(f_hh)
     diag_p = -jnp.diag(f_pp)
-    # JAX broadcast: [pnum, 1] + [1, hnum]
     denom = (diag_p[:, None] + diag_h[None, :]) + delta
     return f_ph / denom
 
@@ -114,7 +115,6 @@ def t2Init(f_pp, f_hh, v_pphh, delta):
     denom_hh = diag_h[None, :] + diag_h[:, None]  # j, i -> ij
     denom_pp = diag_p[None, :] + diag_p[:, None]  # b, a -> ab
 
-    # Outer sum broadcast
     denom = (denom_pp[:, :, None, None] + denom_hh[None, None, :, :]) + delta
     return v_pphh / denom
 
@@ -136,7 +136,6 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph, sparse=True
     X_pp += dgrams.dgram_cdkl_dk_al(v_pphh, t1)
 
     if sparse:
-        # For sparse, v_ppph is the precomputed tuple from v_ppph_dgrams
         H1 += v_ppph[0]
         X_pp += v_ppph[1]
     else:
@@ -223,9 +222,14 @@ def t2Iter(
     diag_p = jnp.diag(X_pp)
     denom_hh = diag_h[None, :] + diag_h[:, None]
     denom_pp = diag_p[None, :] + diag_p[:, None]
-    # denom = -(denom_pp[:, :, None, None] + denom_hh[None, None, :, :])
 
-    return t2 + (H2 / -(denom_pp[:, :, jnp.newaxis, jnp.newaxis] + denom_hh[jnp.newaxis, jnp.newaxis, :, :]))
+    return t2 + (
+        H2
+        / -(
+            denom_pp[:, :, jnp.newaxis, jnp.newaxis]
+            + denom_hh[jnp.newaxis, jnp.newaxis, :, :]
+        )
+    )
 
 
 def ccsd_solver(
@@ -256,29 +260,39 @@ def ccsd_solver(
 
     if chef is not None:
         mesh = chef.mesh
-        rep_sharding = NamedSharding(mesh, P())
-        f_pp = jax.device_put(f_pp, rep_sharding)
-        f_ph = jax.device_put(f_ph, rep_sharding)
-        f_hh = jax.device_put(f_hh, rep_sharding)
 
-        v_ppph = jax.device_put(v_ppph, rep_sharding)
-        v_phph = jax.device_put(v_phph, rep_sharding)
-        v_hhhh = jax.device_put(v_hhhh, rep_sharding)
+        replicate =NamedSharding(mesh, P())
+        shard_2d = NamedSharding(mesh, P("data", None))
+        shard_4d = NamedSharding(mesh, P("data", None, None, None))
 
-        if sparse:
-            # indices (4, NNZ) -> shard axis 1
-            # values (NNZ, ) -> shard axis 0
-            idx_sharding = NamedSharding(mesh, P(None, 'data'))
-            val_sharding = NamedSharding(mesh, P('data'))
+        f_pp = jax.device_put(f_pp, shard_2d)
+        f_ph = jax.device_put(f_ph, shard_2d)
+        f_hh = jax.device_put(f_hh, replicate)
 
-            v_pppp = (
-                jax.device_put(v_pppp[0], idx_sharding), 
-                jax.device_put(v_pppp[1], val_sharding)
-            )
+        v_pphh = jax.device_put(v_pphh, shard_4d)
+        v_phph = jax.device_put(v_phph, shard_4d)
+        v_phhh = jax.device_put(v_phhh, shard_4d)
+        v_hhhh = jax.device_put(v_hhhh, replicate)
+
+        if not sparse:
+            v_pppp = jax.device_put(v_pppp, shard_4d)
+            v_ppph = jax.device_put(v_ppph, shard_4d)
+        else:
+            idx_sharding = NamedSharding(mesh, P(None, "data"))
+            val_sharding = NamedSharding(mesh, P("data"))
+
+            # NOTE(vivek): to_soa_sparse may emit tensor of size zero, avoid sharding that
+            if v_pppp[0].size > 0:
+                v_pppp = (
+                    jax.device_put(v_pppp[0], idx_sharding),
+                    jax.device_put(v_pppp[1], val_sharding),
+                )
+
             v_ppph = (
-                jax.device_put(v_ppph[0], idx_sharding), 
-                jax.device_put(v_ppph[1], val_sharding)
+                jax.device_put(v_ppph[0], idx_sharding),
+                jax.device_put(v_ppph[1], val_sharding),
             )
+
     t1 = (
         t1Init(f_ph, f_pp, f_hh, delta)
         if t1initial is None
@@ -316,8 +330,6 @@ def ccsd_solver(
             v_ppph_results,
             sparse=sparse,
         )
-
-        # JAX lerp via formula
         t1 = t1 + mixing * (t1_new - t1)
 
         if not ccs:
@@ -338,8 +350,8 @@ def ccsd_solver(
             t2 = t2 + mixing * (t2_new - t2)
 
         energy = ccsd_energy(f_ph, v_pphh, t2, t1)
-
         diff = abs(energy - prevEnergy) / max(1.0, abs(energy))
+
         if verbose:
             print(f"Step {i + 1}: {energy} difference = {diff}")
 
@@ -349,10 +361,10 @@ def ccsd_solver(
         if max_diis > 0:
             diis_t1.append(t1)
             diis_t2.append(t2)
-            err_vec = jnp.concatenate(
-                [(t1 - oldT1).reshape(-1), (t2 - oldT2).reshape(-1)]
-            )
-            diis_errors.append(err_vec)
+
+            # STORE AS NATIVE TUPLES. Do not use flatten/reshape(-1)!
+            # Flattening breaks GSPMD layout and causes Out-Of-Memory.
+            diis_errors.append((t1 - oldT1, t2 - oldT2))
 
             if len(diis_errors) > max_diis:
                 diis_t1.pop(0)
@@ -360,17 +372,21 @@ def ccsd_solver(
                 diis_errors.pop(0)
 
             if len(diis_errors) == max_diis:
-                # Solve Pulay
-                # Avoid massive memory allocation by doing local dot products
                 size = len(diis_errors)
                 B = jnp.zeros((size, size), dtype=dtype)
 
-                # Pairwise dots (fast enough in Python since size ~ 10)
                 for x in range(size):
                     for y in range(x, size):
-                        val = jnp.dot(diis_errors[x], diis_errors[y])
+                        e1x, e2x = diis_errors[x]
+                        e1y, e2y = diis_errors[y]
+
+                        # Local element-wise mult + global reduction sum.
+                        # Communicates a single scalar rather than gigabytes of data.
+                        val = jnp.sum(e1x * e1y) + jnp.sum(e2x * e2y)
+
                         B = B.at[x, y].set(val)
-                        B = B.at[y, x].set(val)
+                        if x != y:
+                            B = B.at[y, x].set(val)
 
                 B = B / (jnp.max(jnp.abs(B)) + 1e-16)
 
@@ -383,14 +399,16 @@ def ccsd_solver(
 
                 try:
                     c = jnp.linalg.solve(A, rhs)[:size]
-                    t1 = jnp.zeros_like(t1)
-                    t2 = jnp.zeros_like(t2)
+                    t1_new_diis = jnp.zeros_like(t1)
+                    t2_new_diis = jnp.zeros_like(t2)
+
                     for k in range(size):
-                        t1 += c[k] * diis_t1[k + 1]
+                        t1_new_diis += c[k] * diis_t1[k + 1]
                         if not ccs:
-                            t2 += c[k] * diis_t2[k + 1]
+                            t2_new_diis += c[k] * diis_t2[k + 1]
+
+                    t1, t2 = t1_new_diis, t2_new_diis
                 except Exception:
-                    # Fallback if singular
                     pass
 
                 diis_t1 = [t1]
@@ -408,7 +426,6 @@ def ccsd_solver(
 
 
 # --- Setup and Initialization Wrappers below ---
-# These remain largely identical structurally, using jnp to assemble the data matrices.
 
 
 def get_all_interactions(part, hole, mycontact, sparse=False, dtype=jnp.float64):
@@ -418,16 +435,18 @@ def get_all_interactions(part, hole, mycontact, sparse=False, dtype=jnp.float64)
     lookup_h = {idx: i for i, idx in enumerate(hole)}
     lookup_p = {idx: i for i, idx in enumerate(part)}
 
+    # PREVENT JAX GRAPH EXPLOSION: Initialize as pure NumPy arrays.
+    # Mutating a jnp array inside a native loop destroys compilation time and RAM.
     if sparse:
         v_pppp_list, v_ppph_list = [], []
     else:
-        v_pppp = jnp.zeros((pnum, pnum, pnum, pnum), dtype=dtype)
-        v_ppph = jnp.zeros((pnum, pnum, pnum, hnum), dtype=dtype)
+        v_pppp = np.zeros((pnum, pnum, pnum, pnum), dtype=dtype)
+        v_ppph = np.zeros((pnum, pnum, pnum, hnum), dtype=dtype)
 
-    v_pphh = jnp.zeros((pnum, pnum, hnum, hnum), dtype=dtype)
-    v_phph = jnp.zeros((pnum, hnum, pnum, hnum), dtype=dtype)
-    v_phhh = jnp.zeros((pnum, hnum, hnum, hnum), dtype=dtype)
-    v_hhhh = jnp.zeros((hnum, hnum, hnum, hnum), dtype=dtype)
+    v_pphh = np.zeros((pnum, pnum, hnum, hnum), dtype=dtype)
+    v_phph = np.zeros((pnum, hnum, pnum, hnum), dtype=dtype)
+    v_phhh = np.zeros((pnum, hnum, hnum, hnum), dtype=dtype)
+    v_hhhh = np.zeros((hnum, hnum, hnum, hnum), dtype=dtype)
 
     def get_indices_and_signs(a, b, c, d, sector):
         if sector in [("p", "p", "p", "p"), ("p", "p", "h", "h"), ("h", "h", "h", "h")]:
@@ -444,9 +463,6 @@ def get_all_interactions(part, hole, mycontact, sparse=False, dtype=jnp.float64)
         if sector == ("p", "h", "p", "h"):
             return ((a, b, c, d),), (1.0,)
         return None, None
-
-    # Iteration over raw indices is fast enough in standard Python for initialization
-    import numpy as np
 
     indices = np.array(mycontact.indices)
     values = np.array(mycontact.values)
@@ -487,27 +503,19 @@ def get_all_interactions(part, hole, mycontact, sparse=False, dtype=jnp.float64)
                 if is_sparse_candidate and sparse:
                     buf.append([p[0], p[1], p[2], p[3], term])
                 else:
-                    # Update JAX dense arrays safely during Python init loop
-                    buf = buf.at[p].set(term)
-
-            # Re-assign updated array back to variable
-            if not is_sparse_candidate or not sparse:
-                if sector == ("p", "p", "p", "p"):
-                    v_pppp = buf
-                elif sector == ("p", "p", "p", "h"):
-                    v_ppph = buf
-                elif sector == ("p", "p", "h", "h"):
-                    v_pphh = buf
-                elif sector == ("p", "h", "p", "h"):
-                    v_phph = buf
-                elif sector == ("p", "h", "h", "h"):
-                    v_phhh = buf
-                elif sector == ("h", "h", "h", "h"):
-                    v_hhhh = buf
+                    buf[p] = term
 
     if sparse:
         v_pppp = TwoBodyOperator.from_list(v_pppp_list, nstat)
         v_ppph = TwoBodyOperator.from_list(v_ppph_list, nstat)
+    else:
+        v_pppp = jnp.array(v_pppp, dtype=dtype)
+        v_ppph = jnp.array(v_ppph, dtype=dtype)
+
+    v_pphh = jnp.array(v_pphh, dtype=dtype)
+    v_phph = jnp.array(v_phph, dtype=dtype)
+    v_phhh = jnp.array(v_phhh, dtype=dtype)
+    v_hhhh = jnp.array(v_hhhh, dtype=dtype)
 
     return v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh
 
@@ -629,6 +637,8 @@ def get_norm_ord_int(thisL, holes, vT1, vS1, str_3NF=0, sparse=True, dtype=jnp.f
             def merge_soa(op1, op2):
                 if len(op2) == 0:
                     return op1
+                if len(op1) == 0:
+                    return op2
                 new_idx = jnp.concatenate([op1.indices, op2.indices], axis=0)
                 new_vals = jnp.concatenate([op1.values, op2.values], axis=0)
                 return TwoBodyOperator(new_idx, new_vals, nstat)

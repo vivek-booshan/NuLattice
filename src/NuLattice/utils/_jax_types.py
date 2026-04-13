@@ -120,8 +120,8 @@ class Chef:
 
     def shard_array(self, arr: jnp.array, rank: int = None):
         r = rank if rank is not None else arr.ndim 
-        if r == 0:
-            spec = P()
+        if r == 0: 
+            spec = P() # alternatively can be used for replication
         if r == 1:
             spec = P('data')
         else:
