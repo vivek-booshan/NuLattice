@@ -16,6 +16,7 @@ def to_tensor(arr, dtype=jnp.float64):
     if isinstance(arr, jnp.ndarray):
         return arr.astype(dtype)
         # return jnp.array(arr, dtype=dtype)
+    # FIXME(vivek): base class operator has to_dense so this will always run
     if hasattr(arr, "to_dense"):  # Handle OneBodyOperator
         return jnp.array(arr.to_dense(), dtype=dtype)
     return jnp.array(arr, dtype=dtype)
@@ -248,6 +249,7 @@ def ccsd_solver(
     chef: Chef = None,
 ):
     f_pp, f_ph, f_hh = [to_tensor(f, dtype) for f in fock_mats]
+
     v_pppp_in, v_ppph_in, v_pphh, v_phph, v_phhh, v_hhhh = [
         to_tensor(x, dtype) if not hasattr(x, "indices") else x for x in two_body_int
     ]
@@ -261,22 +263,19 @@ def ccsd_solver(
     if chef is not None:
         mesh = chef.mesh
 
-        replicate =NamedSharding(mesh, P())
-        shard_2d = NamedSharding(mesh, P("data", None))
-        shard_4d = NamedSharding(mesh, P("data", None, None, None))
 
-        f_pp = jax.device_put(f_pp, shard_2d)
-        f_ph = jax.device_put(f_ph, shard_2d)
-        f_hh = jax.device_put(f_hh, replicate)
+        f_pp = chef.prepare(f_pp)
+        f_ph = chef.prepare(f_ph)
+        f_hh = chef.prepare(f_hh, rank=0) # replicate
 
-        v_pphh = jax.device_put(v_pphh, shard_4d)
-        v_phph = jax.device_put(v_phph, shard_4d)
-        v_phhh = jax.device_put(v_phhh, shard_4d)
-        v_hhhh = jax.device_put(v_hhhh, replicate)
+        v_pphh = chef.prepare(v_pphh)
+        v_phph = chef.prepare(v_phph)
+        v_phhh = chef.prepare(v_phhh)
+        v_hhhh = chef.prepare(v_hhhh, rank=0) #replicate
 
         if not sparse:
-            v_pppp = jax.device_put(v_pppp, shard_4d)
-            v_ppph = jax.device_put(v_ppph, shard_4d)
+            v_pppp = chef.prepare(v_pppp)
+            v_ppph = chef.prepare(v_ppph)
         else:
             idx_sharding = NamedSharding(mesh, P(None, "data"))
             val_sharding = NamedSharding(mesh, P("data"))
