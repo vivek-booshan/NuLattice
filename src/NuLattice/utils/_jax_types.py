@@ -106,19 +106,20 @@ class ThreeBodyOperator(Operator):
         return 6
 
 class Chef:
+    # def __new__(cls):
+    #     if jax.device_count() == 1:
+    #         return None
+    #     return super().__new__(cls)
+        
     def __init__(self):
-        if jax.device_count() == 1:
-            return None
+        # self.devices = mesh_utils.create_device_mesh((len(jax.devices()),))
+        self.mesh = Mesh(jax.devices(), axis_names=("data",))
 
-        self.devices = mesh_utils.create_device_mesh((len(jax.devices()),))
-        self.mesh = Mesh(self.devices, axis_names=("data",))
-        self.sharding_spec = NamedSharding(self.mesh, P("data"))
+    # def prepare_operator(self, op):
+    #     return op.to_bcoo(mesh=self.mesh)
 
-    def prepare_operator(self, op):
-        return op.to_bcoo(mesh=self.mesh)
-
-    def prepare_op_dense(self, op):
-        return op.to_dense(mesh=self.mesh)
+    # def prepare_op_dense(self, op):
+    #     return op.to_dense(mesh=self.mesh)
 
     def prepare(self, arr: jnp.array, rank: int = None):
         r = rank if rank is not None else arr.ndim 
