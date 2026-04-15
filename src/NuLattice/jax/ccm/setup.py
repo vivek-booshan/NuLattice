@@ -1,13 +1,25 @@
+from typing import Tuple
 import jax.numpy as jnp
 import numpy as np
 
 import NuLattice.jax.lattice as lat
-from NuLattice.utils._jax_types import TwoBodyOperator, ThreeBodyOperator
+from NuLattice.utils._jax_types import (
+    OneBodyOperator,
+    TwoBodyOperator,
+    ThreeBodyOperator,
+)
 
 from . import three_body_utils as tbu
 
 
-def get_fock_matrices(part, hole, myTkin, v_phph, v_phhh, v_hhhh):
+def get_fock_matrices(
+    part: int,
+    hole: int,
+    myTkin: OneBodyOperator,
+    v_phph: jnp.array,
+    v_phhh: jnp.array,
+    v_hhhh: jnp.array,
+) -> Tuple[jnp.array, jnp.array, jnp.array]:
     pnum = len(part)
     hnum = len(hole)
     n_states = pnum + hnum
@@ -138,22 +150,18 @@ def get_all_interactions(part, hole, mycontact, sparse=False, dtype=jnp.float64)
         v_pppp = jnp.array(v_pppp, dtype=dtype)
         v_ppph = jnp.array(v_ppph, dtype=dtype)
 
-    v_pphh = jnp.array(v_pphh, dtype=dtype)
-    v_phph = jnp.array(v_phph, dtype=dtype)
-    v_phhh = jnp.array(v_phhh, dtype=dtype)
-    v_hhhh = jnp.array(v_hhhh, dtype=dtype)
 
     return v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh
 
 
 def get_norm_ordered_ham(
-    thisL,
-    holes,
-    myTkin,
-    mycontact,
-    my3body=None,
-    sparse=True,
-    NO2B=True,
+    thisL: int,
+    holes: int,
+    myTkin: OneBodyOperator,
+    mycontact: TwoBodyOperator,
+    my3body: ThreeBodyOperator = None,
+    sparse: bool = True,
+    NO2B: bool = True,
     dtype=jnp.float64,
 ):
     hole, part = lat.states2PHSpace(holes, thisL)
@@ -220,7 +228,15 @@ def get_norm_ordered_ham(
     return NO2B_stuff if (NO2B or my3body is None) else (NO2B_stuff, w_res)
 
 
-def get_norm_ord_int(thisL, holes, vT1, vS1, str_3NF=0, sparse=True, dtype=jnp.float64):
+def get_norm_ord_int(
+    thisL: int,
+    holes: int,
+    vT1: float,
+    vS1: float,
+    str_3NF: float = 0,
+    sparse: bool = True,
+    dtype=jnp.float64,
+):
     lattice = lat.get_lattice(thisL)
     myTkin = lat.Tkin(lattice, thisL)
     mycontact = lat.contacts(vT1, vS1, lattice, thisL)
