@@ -150,22 +150,35 @@ class CCMSolver(BaseSolver):
                 ccsd_solver,
             )
         elif self.backend == "jax":
-            from NuLattice.jax.ccm.coupled_cluster import (
+            from NuLattice.jax.ccm import (
                 get_norm_ordered_ham,
                 ccsd_solver,
             )
         else:
             raise ValueError("Unknown backend. Select <cpu|torch|jax>")
 
-        refEn, fock, v2_no = get_norm_ordered_ham(
-            self.L,
-            self.state,
-            self.op1,
-            self.op2,
-            self.op3,
-            NO2B=NO2B,
-            sparse=sparse,
-        )
+        if self.backend == "jax":
+            if not sparse:
+                raise ValueError("Jax backend is sparse only")
+            refEn, fock, v2_no = get_norm_ordered_ham(
+                self.L,
+                self.state,
+                self.op1,
+                self.op2,
+                self.op3,
+                NO2B=NO2B,
+            )
+        else:
+            refEn, fock, v2_no = get_norm_ordered_ham(
+                self.L,
+                self.state,
+                self.op1,
+                self.op2,
+                self.op3,
+                NO2B=NO2B,
+                sparse=sparse,
+            )
+
 
         if self.backend == "jax":
             corrEn, t1, t2 = ccsd_solver(
@@ -176,7 +189,6 @@ class CCMSolver(BaseSolver):
                 max_diis=max_diis,
                 delta=delta,
                 mixing=mixing,
-                sparse=sparse,
                 verbose=verbose,
                 ccs=False,
                 chef=chef,

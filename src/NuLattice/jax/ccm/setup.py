@@ -56,103 +56,92 @@ def get_ref_energy(no_1b_hh, no_2b_hhhh, w_hhh_hhh=None):
             en -= 0.5 * no_2b_hhhh[(i, j, i, j)]
 
     if w_hhh_hhh is not None:
-        if isinstance(w_hhh_hhh, ThreeBodyOperator):
-            en += tbu.get_3NF_Eref(w_hhh_hhh)
-        else:
-            for ele in w_hhh_hhh:
-                [m, i, j, n, k, l, val] = ele
-                if (m, i, j) == (n, k, l):
-                    en += val / 6.0
+        if not isinstance(w_hhh_hhh, ThreeBodyOperator):
+            raise ValueError(f"w_hhh_hhh must be ThreeBodyOperator, but got {type(w_hhh_hhh)}")
+        en += tbu.get_3NF_Eref(w_hhh_hhh)
     return float(en)
 
 
-def get_all_interactions(part, hole, mycontact, sparse=False, dtype=jnp.float64):
+def get_all_interactions(part, hole, mycontact, dtype=np.float64):
+    part, hole = np.array(part), np.array(hole)
     pnum, hnum = len(part), len(hole)
     nstat = pnum + hnum
+    
+    all_indices = np.array(mycontact.indices, dtype=np.int32)
+    max_idx = np.max(all_indices)
+    
+    is_p = np.zeros(max_idx + 1, dtype=bool)
+    is_p[part] = True
+    
+    local_map = np.zeros(max_idx + 1, dtype=np.int32)
+    local_map[part] = np.arange(pnum)
+    local_map[hole] = np.arange(hnum)
 
-    lookup_h = {idx: i for i, idx in enumerate(hole)}
-    lookup_p = {idx: i for i, idx in enumerate(part)}
-
-    # PREVENT JAX GRAPH EXPLOSION: Initialize as pure NumPy arrays.
-    # Mutating a jnp array inside a native loop destroys compilation time and RAM.
-    if sparse:
-        v_pppp_list, v_ppph_list = [], []
-    else:
-        v_pppp = np.zeros((pnum, pnum, pnum, pnum), dtype=dtype)
-        v_ppph = np.zeros((pnum, pnum, pnum, hnum), dtype=dtype)
+    # Particle = 1, Hole = 0
+    # e.g., PPHH -> 1100 = 12
+    p_bits = is_p[all_indices].astype(np.int32)
+    sector_scores = p_bits @ np.array([8, 4, 2, 1])
+    
+    local_idx = local_map[all_indices]
+    vals = np.array(mycontact.values, dtype=dtype)
 
     v_pphh = np.zeros((pnum, pnum, hnum, hnum), dtype=dtype)
     v_phph = np.zeros((pnum, hnum, pnum, hnum), dtype=dtype)
     v_phhh = np.zeros((pnum, hnum, hnum, hnum), dtype=dtype)
     v_hhhh = np.zeros((hnum, hnum, hnum, hnum), dtype=dtype)
+    
+    def add_at_sector(target, score, sign_flip=None):
+        mask = (sector_scores == score)
+        if not np.any(mask):
+            return
+        
+        m_idx = local_idx[mask]
+        m_val = vals[mask]
+        
+        a, b, c, d = m_idx[:, 0], m_idx[:, 1], m_idx[:, 2], m_idx[:, 3]
+        
+        np.add.at(target, (a, b, c, d), m_val)
+        if sign_flip == "ket":
+            np.add.at(target, (b, a, c, d), -m_val)
+        elif sign_flip == "bra":
+            np.add.at(target, (a, b, d, c), -m_val)
+        elif sign_flip == "both":
+            np.add.at(target, (b, a, c, d), -m_val)
+            np.add.at(target, (a, b, d, c), -m_val)
+            np.add.at(target, (b, a, d, c), m_val)
 
-    def get_indices_and_signs(a, b, c, d, sector):
-        if sector in [("p", "p", "p", "p"), ("p", "p", "h", "h"), ("h", "h", "h", "h")]:
-            return ((a, b, c, d), (b, a, c, d), (a, b, d, c), (b, a, d, c)), (
-                1.0,
-                -1.0,
-                -1.0,
-                1.0,
-            )
-        if sector == ("p", "p", "p", "h"):
-            return ((a, b, c, d), (b, a, c, d)), (1.0, -1.0)
-        if sector == ("p", "h", "h", "h"):
-            return ((a, b, c, d), (a, b, d, c)), (1.0, -1.0)
-        if sector == ("p", "h", "p", "h"):
-            return ((a, b, c, d),), (1.0,)
-        return None, None
+    add_at_sector(v_pphh, 12,"both") # 1100 (PPHH)
+    add_at_sector(v_phph, 10)        # 1010 (PHPH)
+    add_at_sector(v_phhh, 8, "bra")  # 1000 (PHHH)
+    add_at_sector(v_hhhh, 0, "both") # 0000 (HHHH)
 
-    indices = np.array(mycontact.indices)
-    values = np.array(mycontact.values)
+    def get_sparse_soa(score, flip_ket=False):
+        mask = (sector_scores == score)
+        if not np.any(mask):
+            return TwoBodyOperator(np.empty((0, 4), dtype=np.int32), np.empty(0), nstat)
+        
+        m_idx = local_idx[mask]
+        m_val = vals[mask]
+        
+        if flip_ket:
+            # Concat (a,b,c,d) with (b,a,c,d) and flip sign
+            idx = np.concatenate([m_idx, m_idx[:, [1, 0, 2, 3]]])
+            v = np.concatenate([m_val, -m_val])
+        else: # PPPP Full anti-sym
+            idx = np.concatenate([
+                m_idx,                  # abcd
+                m_idx[:, [1, 0, 2, 3]], # bacd (-)
+                m_idx[:, [0, 1, 3, 2]], # abdc (-)
+                m_idx[:, [1, 0, 3, 2]]  # badc (+)
+            ])
+            v = np.concatenate([m_val, -m_val, -m_val, m_val])
+            
+        return TwoBodyOperator(idx, v, nstat)
 
-    for position, val in zip(indices, values):
-        i1, i2, i3, i4 = position
-        k_t = [("h" if i in hole else "p") for i in [i1, i2]]
-        b_t = [("h" if i in hole else "p") for i in [i3, i4]]
-
-        s_k, s_b = 1.0, 1.0
-        if k_t == ["h", "p"]:
-            i1, i2, k_t, s_k = i2, i1, ["p", "h"], -1.0
-        if b_t == ["h", "p"]:
-            i3, i4, b_t, s_b = i4, i3, ["p", "h"], -1.0
-
-        sector = tuple(k_t + b_t)
-        mapped = [
-            lookup_p[i] if t == "p" else lookup_h[i]
-            for i, t in zip([i1, i2, i3, i4], sector)
-        ]
-
-        target = {
-            ("p", "p", "p", "p"): (v_pppp_list if sparse else v_pppp, True),
-            ("p", "p", "p", "h"): (v_ppph_list if sparse else v_ppph, True),
-            ("p", "p", "h", "h"): (v_pphh, False),
-            ("p", "h", "p", "h"): (v_phph, False),
-            ("p", "h", "h", "h"): (v_phhh, False),
-            ("h", "h", "h", "h"): (v_hhhh, False),
-        }.get(sector)
-
-        if target:
-            buf, is_sparse_candidate = target
-            perms, signs = get_indices_and_signs(*mapped, sector)
-            base_val = float(val) * s_k * s_b
-
-            for p, s in zip(perms, signs):
-                term = base_val * s
-                if is_sparse_candidate and sparse:
-                    buf.append([p[0], p[1], p[2], p[3], term])
-                else:
-                    buf[p] = term
-
-    if sparse:
-        v_pppp = TwoBodyOperator.from_list(v_pppp_list, nstat)
-        v_ppph = TwoBodyOperator.from_list(v_ppph_list, nstat)
-    else:
-        v_pppp = jnp.array(v_pppp, dtype=dtype)
-        v_ppph = jnp.array(v_ppph, dtype=dtype)
-
+    v_pppp = get_sparse_soa(15) # 1111
+    v_ppph = get_sparse_soa(14, flip_ket=True) # 1110
 
     return v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh
-
 
 def get_norm_ordered_ham(
     thisL: int,
@@ -160,7 +149,6 @@ def get_norm_ordered_ham(
     myTkin: OneBodyOperator,
     mycontact: TwoBodyOperator,
     my3body: ThreeBodyOperator = None,
-    sparse: bool = True,
     NO2B: bool = True,
     dtype=jnp.float64,
 ):
@@ -168,10 +156,12 @@ def get_norm_ordered_ham(
     hnum, pnum = len(hole), len(part)
     nstat = pnum + hnum
 
+    # np except pppp, ppph
     v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh = get_all_interactions(
-        part, hole, mycontact, sparse=sparse, dtype=dtype
+        part, hole, mycontact, dtype=dtype
     )
 
+    # jnp
     f_pp, f_ph, f_hh = get_fock_matrices(part, hole, myTkin, v_phph, v_phhh, v_hhhh)
 
     if my3body is not None:
@@ -191,26 +181,20 @@ def get_norm_ordered_ham(
             w_res[8],
             pnum,
             hnum,
-            sparse_pppp=sparse,
-            sparse_ppph=sparse,
         )
 
-        if sparse:
 
-            def merge_ops(op1, op2):
-                if len(op2) == 0:
-                    return op1
-                if len(op1) == 0:
-                    return op2
-                new_idx = jnp.concatenate([op1.indices, op2.indices], axis=0)
-                new_vals = jnp.concatenate([op1.values, op2.values], axis=0)
-                return TwoBodyOperator(new_idx, new_vals, nstat)
+        def merge_ops(op1, op2):
+            if len(op2) == 0:
+                return op1
+            if len(op1) == 0:
+                return op2
+            new_idx = jnp.concatenate([op1.indices, op2.indices], axis=0)
+            new_vals = jnp.concatenate([op1.values, op2.values], axis=0)
+            return TwoBodyOperator(new_idx, new_vals, nstat)
 
-            v_pppp = merge_ops(v_pppp, dum_2b[0])
-            v_ppph = merge_ops(v_ppph, dum_2b[1])
-        else:
-            v_pppp += dum_2b[0]
-            v_ppph += dum_2b[1]
+        v_pppp = merge_ops(v_pppp, dum_2b[0])
+        v_ppph = merge_ops(v_ppph, dum_2b[1])
 
         v_pphh += dum_2b[2]
         v_phph += dum_2b[3]
@@ -234,7 +218,6 @@ def get_norm_ord_int(
     vT1: float,
     vS1: float,
     str_3NF: float = 0,
-    sparse: bool = True,
     dtype=jnp.float64,
 ):
     lattice = lat.get_lattice(thisL)
@@ -246,7 +229,7 @@ def get_norm_ord_int(
     nstat = hnum + pnum
 
     raw_2b = list(
-        get_all_interactions(part, hole, mycontact, sparse=sparse, dtype=dtype)
+        get_all_interactions(part, hole, mycontact, dtype=dtype)
     )
 
     fock_mats = list(
@@ -270,26 +253,19 @@ def get_norm_ord_int(
             w_ops[8],
             pnum,
             hnum,
-            sparse_pppp=sparse,
-            sparse_ppph=sparse,
         )
 
-        if sparse:
+        def merge_soa(op1, op2):
+            if len(op2) == 0:
+                return op1
+            if len(op1) == 0:
+                return op2
+            new_idx = jnp.concatenate([op1.indices, op2.indices], axis=0)
+            new_vals = jnp.concatenate([op1.values, op2.values], axis=0)
+            return TwoBodyOperator(new_idx, new_vals, nstat)
 
-            def merge_soa(op1, op2):
-                if len(op2) == 0:
-                    return op1
-                if len(op1) == 0:
-                    return op2
-                new_idx = jnp.concatenate([op1.indices, op2.indices], axis=0)
-                new_vals = jnp.concatenate([op1.values, op2.values], axis=0)
-                return TwoBodyOperator(new_idx, new_vals, nstat)
-
-            raw_2b[0] = merge_soa(raw_2b[0], dum_two_body[0])
-            raw_2b[1] = merge_soa(raw_2b[1], dum_two_body[1])
-        else:
-            raw_2b[0] += dum_two_body[0]
-            raw_2b[1] += dum_two_body[1]
+        raw_2b[0] = merge_soa(raw_2b[0], dum_two_body[0])
+        raw_2b[1] = merge_soa(raw_2b[1], dum_two_body[1])
 
         for i in range(2, 6):
             raw_2b[i] += dum_two_body[i]

@@ -1,6 +1,8 @@
+from functools import partial
+from typing import List, Tuple, Union
+
 import jax
 import jax.numpy as jnp
-from typing import List, Tuple, Union
 from NuLattice.utils._jax_types import ThreeBodyOperator, TwoBodyOperator
 
 ThreeBodyList = List[List[Union[int, float]]]
@@ -50,6 +52,7 @@ def get_3NF(
     ket_indices = indices[:, :3]
     bra_indices = indices[:, 3:]
 
+    @jax.jit
     def vectorize_order(current_types, current_indices):
         """Reorders indices to (p...p h...h) format and computes sign flips.
         Rewritten to use jnp.where to avoid dynamic boolean masking."""
@@ -134,23 +137,7 @@ def get_3NF(
         kp, ks = perms_lookup[k_s]
         bp, bs = perms_lookup[b_s]
 
-        n_perms_k = len(ks)
-        n_perms_b = len(bs)
-
-        expanded_ket = base_ket[:, kp]
-        expanded_bra = base_bra[:, bp]
-
-        comb_signs = ks[:, None] * bs[None, :]
-        expanded_vals = base_vals[:, None, None] * comb_signs[None, :, :]
-
-        M = base_ket.shape[0]
-        final_ket = jnp.broadcast_to(
-            jnp.expand_dims(expanded_ket, 2), (M, n_perms_k, n_perms_b, 3)
-        ).reshape(-1, 3)
-        final_bra = jnp.broadcast_to(
-            jnp.expand_dims(expanded_bra, 1), (M, n_perms_k, n_perms_b, 3)
-        ).reshape(-1, 3)
-        final_vals = expanded_vals.reshape(-1)
+        final_ket, final_bra, final_vals = expand_permutations_kernel(base_ket, base_bra, base_vals, kp, ks, bp, bs)
 
         local_ket = local_map[final_ket]
         local_bra = local_map[final_bra]
@@ -161,6 +148,7 @@ def get_3NF(
     return tuple(results)
 
 
+@jax.jit
 def _eref_kernel(indices, values):
     """Internal JIT-compiled kernel for Eref"""
     mask = (
@@ -178,6 +166,7 @@ def get_3NF_Eref(w_hhh_hhh: ThreeBodyOperator) -> float:
     return float(_eref_kernel(w_hhh_hhh.indices, w_hhh_hhh.values))
 
 
+@partial(jax.jit, static_argnums=(3,))
 def _fock_accumulator(target, indices, values, row_col_map):
     """Internal JIT-compiled accumulator for 1-body normal ordering"""
     if values.size == 0:
@@ -212,6 +201,7 @@ def get_3NF_fock(
     return f_pp, f_ph, f_hh
 
 
+@partial(jax.jit, static_argnums=(3,))
 def _dense_tbme_accumulator(target, indices, values, dim_map):
     """Internal JIT-compiled accumulator for 2-body dense tensor construction"""
     if values.size == 0:
@@ -238,8 +228,6 @@ def get_3NF_tbme(
     w_hhh_hhh: ThreeBodyOperator,
     pnum: int,
     hnum: int,
-    sparse_pppp: bool = True,
-    sparse_ppph: bool = True,
 ) -> Tuple[Union[TwoBodyOperator, jnp.ndarray], ...]:
     nstat = pnum + hnum
 
@@ -266,21 +254,9 @@ def get_3NF_tbme(
         new_indices = valid_idx[:, list(dim_map)]
         return TwoBodyOperator(new_indices, valid_val, nstat)
 
-    if sparse_pppp:
-        v_pppp = get_sparse(w_pph_pph, (0, 1, 3, 4))
-    else:
-        v_pppp = jnp.zeros((pnum, pnum, pnum, pnum), dtype=jnp.float64)
-        v_pppp = _dense_tbme_accumulator(
-            v_pppp, w_pph_pph.indices, w_pph_pph.values, (0, 1, 3, 4)
-        )
+    v_pppp = get_sparse(w_pph_pph, (0, 1, 3, 4))
 
-    if sparse_ppph:
-        v_ppph = get_sparse(w_pph_phh, (0, 1, 3, 4))
-    else:
-        v_ppph = jnp.zeros((pnum, pnum, pnum, hnum), dtype=jnp.float64)
-        v_ppph = _dense_tbme_accumulator(
-            v_ppph, w_pph_phh.indices, w_pph_phh.values, (0, 1, 3, 4)
-        )
+    v_ppph = get_sparse(w_pph_phh, (0, 1, 3, 4))
 
     v_pphh = _dense_tbme_accumulator(
         v_pphh, w_pph_hhh.indices, w_pph_hhh.values, (0, 1, 3, 4)
@@ -296,3 +272,52 @@ def get_3NF_tbme(
     )
 
     return v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh
+
+@jax.jit
+def expand_permutations_kernel(
+    base_ket: jax.Array, 
+    base_bra: jax.Array, 
+    base_vals: jax.Array, 
+    kp: jax.Array, 
+    ks: jax.Array, 
+    bp: jax.Array, 
+    bs: jax.Array
+) -> Tuple[jax.Array, jax.Array, jax.Array]:
+    """
+    JIT-compiled expansion of 3-body permutations with type annotations.
+    
+    Args:
+        base_ket: (M, 3) canonical ket indices
+        base_bra: (M, 3) canonical bra indices
+        base_vals: (M,) canonical values
+        kp, bp: Permutation index arrays (e.g., shape (6, 3))
+        ks, bs: Permutation sign arrays (e.g., shape (6,))
+        
+    Returns:
+        A tuple of (final_ket, final_bra, final_vals)
+    """
+    n_perms_k: int = ks.shape[0]
+    n_perms_b: int = bs.shape[0]
+    M: int = base_ket.shape[0]
+
+    expanded_ket: jax.Array = base_ket[:, kp]  # (M, n_perms_k, 3)
+    expanded_bra: jax.Array = base_bra[:, bp]  # (M, n_perms_b, 3)
+
+    # (n_perms_k, n_perms_b)
+    comb_signs: jax.Array = ks[:, None] * bs[None, :]
+
+    # (M, n_perms_k, n_perms_b)
+    expanded_vals: jax.Array = base_vals[:, None, None] * comb_signs[None, :, :]
+
+    # (NNZ, 3)
+    final_ket: jax.Array = jnp.broadcast_to(
+        expanded_ket[:, :, None, :], (M, n_perms_k, n_perms_b, 3)
+    ).reshape(-1, 3)
+    
+    final_bra: jax.Array = jnp.broadcast_to(
+        expanded_bra[:, None, :, :], (M, n_perms_k, n_perms_b, 3)
+    ).reshape(-1, 3)
+    
+    final_vals: jax.Array = expanded_vals.reshape(-1)
+
+    return final_ket, final_bra, final_vals
