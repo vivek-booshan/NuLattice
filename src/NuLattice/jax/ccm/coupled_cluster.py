@@ -1,24 +1,11 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax.sharding import NamedSharding, PartitionSpec as P
 from functools import partial
 
 from NuLattice.utils._jax_types import TwoBodyOperator, Chef
 
 from . import ccDgrams as dgrams
-
-
-def to_tensor(arr, dtype=jnp.float64):
-    """Helper to convert numpy arrays/lists/Operators to JAX arrays."""
-    if isinstance(arr, jnp.ndarray):
-        return arr.astype(dtype)
-        # return jnp.array(arr, dtype=dtype)
-    # FIXME(vivek): base class operator has to_dense so this will always run
-    if hasattr(arr, "to_dense"):  # Handle OneBodyOperator
-        return jnp.array(arr.to_dense(), dtype=dtype)
-    return jnp.array(arr, dtype=dtype)
-
 
 def to_soa_sparse(sparse_input, dtype=jnp.float64):
     """
@@ -199,11 +186,9 @@ def ccsd_solver(
     dtype=jnp.float64,
     chef: Chef = None,
 ):
-    f_pp, f_ph, f_hh = [to_tensor(f, dtype) for f in fock_mats]
 
-    v_pppp_in, v_ppph_in, v_pphh, v_phph, v_phhh, v_hhhh = [
-        to_tensor(x, dtype) if not hasattr(x, "indices") else x for x in two_body_int
-    ]
+    f_pp, f_ph, f_hh = fock_mats
+    v_pppp_in, v_ppph_in, v_pphh, v_phph, v_phhh, v_hhhh = two_body_int
 
     if sparse:
         v_pppp = to_soa_sparse(v_pppp_in, dtype)
@@ -245,7 +230,7 @@ def ccsd_solver(
     t1 = (
         t1Init(f_ph, f_pp, f_hh, delta)
         if t1initial is None
-        else to_tensor(t1initial, dtype)
+        else jnp.array(t1initial, dtype)
     )
     t2 = (
         jnp.zeros_like(v_pphh)
