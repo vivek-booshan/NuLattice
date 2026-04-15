@@ -1,3 +1,5 @@
+from collections import deque
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
@@ -184,9 +186,11 @@ def ccsd_solver(
     )
 
     if max_diis > 0:
-        diis_t1 = [t1]
-        diis_t2 = [t2]
-        diis_errors = []
+        diis_t1 = deque(maxlen=max_diis)
+        diis_t2 = deque(maxlen=max_diis)
+        diis_errors = deque(maxlen=max_diis)
+        diis_t1.append(t1)
+        diis_t2.append(t2)
 
     prevEnergy = ccsd_energy(f_ph, v_pphh, t2, t1)
     if verbose:
@@ -212,10 +216,10 @@ def ccsd_solver(
 
         if not ccs:
             X_hh, X_pp = t2_X(oldT1, t2, f_pp, f_ph, f_hh, v_pphh)
-            # X_pp.block_until_ready()
+            X_pp.block_until_ready() # force intermediate dealloc
 
             H2 = t2_H2(oldT1, t2, v_pppp, v_ppph_results, v_pphh, v_phph, v_phhh, v_hhhh)
-            # H2.block_until_ready()
+            H2.block_until_ready() # force intermediate dealloc
 
             t2_new = t2_update(t2, X_hh, X_pp, H2)
             del X_hh, X_pp, H2
@@ -237,11 +241,6 @@ def ccsd_solver(
             # STORE AS NATIVE TUPLES. Do not use flatten/reshape(-1)!
             # Flattening breaks GSPMD layout and causes Out-Of-Memory.
             diis_errors.append((t1 - oldT1, t2 - oldT2))
-
-            if len(diis_errors) > max_diis:
-                diis_t1.pop(0)
-                diis_t2.pop(0)
-                diis_errors.pop(0)
 
             if len(diis_errors) == max_diis:
                 size = len(diis_errors)
@@ -275,17 +274,20 @@ def ccsd_solver(
                     t2_new_diis = jnp.zeros_like(t2)
 
                     for k in range(size):
-                        t1_new_diis += c[k] * diis_t1[k + 1]
+                        t1_new_diis += c[k] * diis_t1[k]
                         if not ccs:
-                            t2_new_diis += c[k] * diis_t2[k + 1]
+                            t2_new_diis += c[k] * diis_t2[k]
 
                     t1, t2 = t1_new_diis, t2_new_diis
                 except Exception:
                     pass
 
-                diis_t1 = [t1]
-                diis_t2 = [t2]
-                diis_errors = []
+                diis_t1.clear()
+                diis_t2.clear()
+                diis_errors.clear()
+
+                diis_t1.append(t1)
+                diis_t2.append(t2)
 
         if abs(energy) > 1e10 or jnp.isnan(energy):
             print("Diverged.")
