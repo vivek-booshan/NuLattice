@@ -161,7 +161,6 @@ def get_3NF(
     return tuple(results)
 
 
-@jax.jit
 def _eref_kernel(indices, values):
     """Internal JIT-compiled kernel for Eref"""
     mask = (
@@ -179,7 +178,6 @@ def get_3NF_Eref(w_hhh_hhh: ThreeBodyOperator) -> float:
     return float(_eref_kernel(w_hhh_hhh.indices, w_hhh_hhh.values))
 
 
-@jax.jit
 def _fock_accumulator(target, indices, values, row_col_map):
     """Internal JIT-compiled accumulator for 1-body normal ordering"""
     if values.size == 0:
@@ -214,7 +212,6 @@ def get_3NF_fock(
     return f_pp, f_ph, f_hh
 
 
-@jax.jit
 def _dense_tbme_accumulator(target, indices, values, dim_map):
     """Internal JIT-compiled accumulator for 2-body dense tensor construction"""
     if values.size == 0:
