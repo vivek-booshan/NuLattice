@@ -20,12 +20,12 @@ def v_ppph_dgrams(v_ppph_soa, t1, t2):
     pnum, hnum = t1.shape
 
     # Initialize return buffers
-    ret0 = jnp.zeros((pnum, hnum))
-    ret1 = jnp.zeros((pnum, pnum))
+    ret0 = jnp.zeros((pnum, hnum)) 
+    ret1 = jnp.zeros((pnum, pnum)) 
     ret2 = jnp.zeros((pnum, pnum, hnum, hnum))
-    ret3 = jnp.zeros((pnum, pnum))
-    ret4 = jnp.zeros((pnum, pnum, hnum, hnum))
-    ret5 = jnp.zeros((pnum, hnum, hnum, hnum))
+    ret3 = jnp.zeros((pnum, pnum)) 
+    ret4 = jnp.zeros((pnum, pnum, hnum, hnum)) 
+    ret5 = jnp.zeros((pnum, hnum, hnum, hnum)) 
     ret6 = jnp.zeros((pnum, hnum, hnum, hnum))
 
     if values.size == 0:
@@ -56,16 +56,17 @@ def v_ppph_dgrams(v_ppph_soa, t1, t2):
     ret4 = ret4.at[idx_a, idx_d, :, idx_k].add(term_4)
 
     # Diagram 5: ret5[a, i, j, k] += V[c,d,a,k] * T2[c,d,i,j]
-    term_5 = values[:, None, None] * t2[idx_c, idx_d, :, :]  # (nnz, hnum, hnum)
-    ret5 = ret5.at[idx_a, :, :, idx_k].add(term_5)
+    # term_5 = values[:, None, None] * t2[idx_c, idx_d, :, :]
+    # (nnz, hnum, hnum)
+    ret5 = ret5.at[idx_a, :, :, idx_k].add(values[:, None, None] * t2[idx_c, idx_d, :, :])
 
     # Diagram 6: ret6[a, i, j, k] += V[c,d,a,k] * (T1[c,i]*T1[d,j])
     # Memory optimization: compute sliced doubleT1 on the fly
     t1_c = t1[idx_c, :]  # (nnz, hnum)
     t1_d = t1[idx_d, :]  # (nnz, hnum)
     # Outer product for each nnz entry: (nnz, hnum, 1) * (nnz, 1, hnum)
-    term_6 = values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :])
-    ret6 = ret6.at[idx_a, :, :, idx_k].add(term_6)
+    # term_6 = values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :])
+    ret6 = ret6.at[idx_a, :, :, idx_k].add(values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :]))
 
     return ret0, ret1, ret2, ret3, ret4, ret5, ret6
 
