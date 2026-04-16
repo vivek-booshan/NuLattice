@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List, Optional
 import jax.numpy as jnp
 import numpy as np
 
@@ -85,6 +85,7 @@ def get_all_interactions(part, hole, mycontact, dtype=np.float64):
     local_idx = local_map[all_indices]
     vals = np.array(mycontact.values, dtype=dtype)
 
+    # NOTE: will eventually get big for large enough L / atom
     v_pphh = np.zeros((pnum, pnum, hnum, hnum), dtype=dtype)
     v_phph = np.zeros((pnum, hnum, pnum, hnum), dtype=dtype)
     v_phhh = np.zeros((pnum, hnum, hnum, hnum), dtype=dtype)
@@ -144,45 +145,45 @@ def get_all_interactions(part, hole, mycontact, dtype=np.float64):
     return v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh
 
 def get_norm_ordered_ham(
-    thisL: int,
-    holes: int,
-    myTkin: OneBodyOperator,
-    mycontact: TwoBodyOperator,
-    my3body: ThreeBodyOperator = None,
+    L: int,
+    ref_state: List[List[int]],
+    op1: OneBodyOperator,
+    op2: TwoBodyOperator,
+    op3: Optional[ThreeBodyOperator] = None,
     NO2B: bool = True,
     dtype=jnp.float64,
 ):
-    hole, part = lat.states2PHSpace(holes, thisL)
+    hole, part = lat.states2PHSpace(ref_state, L)
     hnum, pnum = len(hole), len(part)
     nstat = pnum + hnum
 
     # np except pppp, ppph
     v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh = get_all_interactions(
-        part, hole, mycontact, dtype=dtype
+        part, hole, op2, dtype=dtype
     )
 
     # jnp
-    f_pp, f_ph, f_hh = get_fock_matrices(part, hole, myTkin, v_phph, v_phhh, v_hhhh)
+    f_pp, f_ph, f_hh = get_fock_matrices(part, hole, op1, v_phph, v_phhh, v_hhhh)
 
-    if my3body is not None:
-        w_res = tbu.get_3NF(part, hole, my3body.to_list())
+    if op3 is not None:
+        w_res = tbu.get_3NF(part, hole, op3)
 
         dum_fock = tbu.get_3NF_fock(hnum, pnum, w_res[6], w_res[7], w_res[8])
         f_pp += dum_fock[0]
         f_ph += dum_fock[1]
         f_hh += dum_fock[2]
 
+        # returns pppp, ppph, pphh, phph, phhh, hhhh
         dum_2b = tbu.get_3NF_tbme(
-            w_res[2],
-            w_res[4],
-            w_res[5],
-            w_res[6],
-            w_res[7],
-            w_res[8],
+            w_res[2], # dense
+            w_res[4], # dense
+            w_res[5], # dense
+            w_res[6], # dense
+            w_res[7], # dense
+            w_res[8], # dense
             pnum,
             hnum,
         )
-
 
         def merge_ops(op1, op2):
             if len(op2) == 0:
@@ -209,7 +210,7 @@ def get_norm_ordered_ham(
     fock = [f_pp, f_ph, f_hh]
 
     NO2B_stuff = vacEn, fock, two_body
-    return NO2B_stuff if (NO2B or my3body is None) else (NO2B_stuff, w_res)
+    return NO2B_stuff if (NO2B or op3 is None) else (NO2B_stuff, w_res)
 
 
 def get_norm_ord_int(

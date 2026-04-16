@@ -3,15 +3,16 @@ from typing import List, Tuple, Union
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+
 from NuLattice.utils._jax_types import ThreeBodyOperator, TwoBodyOperator
 
-ThreeBodyList = List[List[Union[int, float]]]
-
+# TODO: avoid jnp.zeros eager allocation
 
 def get_3NF(
     part: List[int],
     hole: List[int],
-    my3body: ThreeBodyList,
+    op3: ThreeBodyOperator,
 ) -> Tuple[ThreeBodyOperator, ...]:
     """
     Sorts raw three-body matrix elements into 9 blocks using JAX vectorized ops.
@@ -20,14 +21,7 @@ def get_3NF(
     """
     nstat = len(part) + len(hole)
 
-    if not my3body:
-        empty_idx = jnp.empty((0, 6), dtype=jnp.int32)
-        empty_val = jnp.empty((0,), dtype=jnp.float64)
-        return tuple(ThreeBodyOperator(empty_idx, empty_val, nstat) for _ in range(9))
-
-    data_tensor = jnp.array(my3body, dtype=jnp.float64)
-    indices = data_tensor[:, :6].astype(jnp.int32)  # (N, 6)
-    values = data_tensor[:, 6]  # (N,)
+    indices, values = op3.indices, op3.values
 
     max_idx = int(jnp.max(indices))
 
@@ -166,7 +160,7 @@ def get_3NF_Eref(w_hhh_hhh: ThreeBodyOperator) -> float:
     return float(_eref_kernel(w_hhh_hhh.indices, w_hhh_hhh.values))
 
 
-@partial(jax.jit, static_argnums=(3,))
+# @partial(jax.jit, static_argnums=(3,))
 def _fock_accumulator(target, indices, values, row_col_map):
     """Internal JIT-compiled accumulator for 1-body normal ordering"""
     if values.size == 0:
@@ -178,8 +172,10 @@ def _fock_accumulator(target, indices, values, row_col_map):
     col_idx = indices[:, row_col_map[1]]
 
     # JAX `.at` automatically handles repeated indices, removing the need for flat strides
-    masked_vals = jnp.where(mask, 0.5 * values, 0.0)
-    return target.at[row_idx, col_idx].add(masked_vals)
+    masked_vals = np.where(mask, 0.5 * values, 0.0)
+    np.add.at(target, (row_idx, col_idx), masked_vals)
+    return target
+    # return target.at[row_idx, col_idx].add(masked_vals)
 
 
 def get_3NF_fock(
@@ -188,11 +184,11 @@ def get_3NF_fock(
     w_phh_phh: ThreeBodyOperator,
     w_phh_hhh: ThreeBodyOperator,
     w_hhh_hhh: ThreeBodyOperator,
-) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-    f_pp = jnp.zeros((pnum, pnum), dtype=jnp.float64)
-    f_ph = jnp.zeros((pnum, hnum), dtype=jnp.float64)
-    f_hh = jnp.zeros((hnum, hnum), dtype=jnp.float64)
+    f_pp = np.zeros((pnum, pnum), dtype=np.float64)
+    f_ph = np.zeros((pnum, hnum), dtype=np.float64)
+    f_hh = np.zeros((hnum, hnum), dtype=np.float64)
 
     f_pp = _fock_accumulator(f_pp, w_phh_phh.indices, w_phh_phh.values, (0, 3))
     f_ph = _fock_accumulator(f_ph, w_phh_hhh.indices, w_phh_hhh.values, (0, 3))
@@ -201,14 +197,14 @@ def get_3NF_fock(
     return f_pp, f_ph, f_hh
 
 
-@partial(jax.jit, static_argnums=(3,))
+# @partial(jax.jit, static_argnums=(3,))
 def _dense_tbme_accumulator(target, indices, values, dim_map):
     """Internal JIT-compiled accumulator for 2-body dense tensor construction"""
     if values.size == 0:
         return target
 
     mask = indices[:, 2] == indices[:, 5]
-    masked_vals = jnp.where(mask, values, 0.0)
+    masked_vals = np.where(mask, values, 0.0)
 
     idx_0 = indices[:, dim_map[0]]
     idx_1 = indices[:, dim_map[1]]
@@ -216,7 +212,9 @@ def _dense_tbme_accumulator(target, indices, values, dim_map):
     idx_3 = indices[:, dim_map[3]]
 
     # 4D scatter add without any stride calculations!
-    return target.at[idx_0, idx_1, idx_2, idx_3].add(masked_vals)
+    np.add.at(target, (idx_0, idx_1, idx_2, idx_3), masked_vals)
+    return target
+    # return target.at[idx_0, idx_1, idx_2, idx_3].add(masked_vals)
 
 
 def get_3NF_tbme(
@@ -228,13 +226,13 @@ def get_3NF_tbme(
     w_hhh_hhh: ThreeBodyOperator,
     pnum: int,
     hnum: int,
-) -> Tuple[Union[TwoBodyOperator, jnp.ndarray], ...]:
+) -> Tuple[Union[TwoBodyOperator, np.ndarray], ...]:
     nstat = pnum + hnum
 
-    v_pphh = jnp.zeros((pnum, pnum, hnum, hnum), dtype=jnp.float64)
-    v_phph = jnp.zeros((pnum, hnum, pnum, hnum), dtype=jnp.float64)
-    v_phhh = jnp.zeros((pnum, hnum, hnum, hnum), dtype=jnp.float64)
-    v_hhhh = jnp.zeros((hnum, hnum, hnum, hnum), dtype=jnp.float64)
+    v_pphh = np.zeros((pnum, pnum, hnum, hnum), dtype=np.float64)
+    v_phph = np.zeros((pnum, hnum, pnum, hnum), dtype=np.float64)
+    v_phhh = np.zeros((pnum, hnum, hnum, hnum), dtype=np.float64)
+    v_hhhh = np.zeros((hnum, hnum, hnum, hnum), dtype=np.float64)
 
     def get_sparse(op: ThreeBodyOperator, dim_map) -> TwoBodyOperator:
         # We cannot JIT this because boolean masking changes the shape
@@ -259,16 +257,16 @@ def get_3NF_tbme(
     v_ppph = get_sparse(w_pph_phh, (0, 1, 3, 4))
 
     v_pphh = _dense_tbme_accumulator(
-        v_pphh, w_pph_hhh.indices, w_pph_hhh.values, (0, 1, 3, 4)
+        v_pphh, np.asarray(w_pph_hhh.indices), np.asarray(w_pph_hhh.values), (0, 1, 3, 4)
     )
     v_phph = _dense_tbme_accumulator(
-        v_phph, w_phh_phh.indices, w_phh_phh.values, (0, 1, 3, 4)
+        v_phph, np.asarray(w_phh_phh.indices), np.asarray(w_phh_phh.values), (0, 1, 3, 4)
     )
     v_phhh = _dense_tbme_accumulator(
-        v_phhh, w_phh_hhh.indices, w_phh_hhh.values, (0, 1, 3, 4)
+        v_phhh, np.asarray(w_phh_hhh.indices), np.asarray(w_phh_hhh.values), (0, 1, 3, 4)
     )
     v_hhhh = _dense_tbme_accumulator(
-        v_hhhh, w_hhh_hhh.indices, w_hhh_hhh.values, (0, 1, 3, 4)
+        v_hhhh, np.asarray(w_hhh_hhh.indices), np.asarray(w_hhh_hhh.values), (0, 1, 3, 4)
     )
 
     return v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh
