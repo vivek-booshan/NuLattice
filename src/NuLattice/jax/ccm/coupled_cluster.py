@@ -1,3 +1,4 @@
+from typing import Optional
 from collections import deque
 
 import jax
@@ -6,6 +7,8 @@ import jax.numpy as jnp
 from NuLattice.utils._jax_types import Chef
 
 from .amplitudes import t1Iter, t2_X, t2_H2, t2_update
+
+# TODO: shard/handle t1 and t2 initialization
 
 @jax.jit
 def ccsd_energy(f_ph, v_pphh, t2, t1):
@@ -17,10 +20,10 @@ def ccsd_energy(f_ph, v_pphh, t2, t1):
 
 @jax.jit
 def t1Init(f_ph, f_pp, f_hh, delta):
-    diag_h = jnp.diag(f_hh)
-    diag_p = -jnp.diag(f_pp)
-    denom = (diag_p[:, None] + diag_h[None, :]) + delta
-    return f_ph / denom
+    return f_ph / (delta + (
+        - jnp.diag(f_pp)[:, None]
+        + jnp.diag(f_hh)[None, :]
+    ))
 
 
 @jax.jit
@@ -28,11 +31,12 @@ def t2Init(f_pp, f_hh, v_pphh, delta):
     diag_h = jnp.diag(f_hh)
     diag_p = -jnp.diag(f_pp)
 
-    denom_hh = diag_h[None, :] + diag_h[:, None]  # j, i -> ij
-    denom_pp = diag_p[None, :] + diag_p[:, None]  # b, a -> ab
-
-    denom = (denom_pp[:, :, None, None] + denom_hh[None, None, :, :]) + delta
-    return v_pphh / denom
+    return v_pphh / (delta + (
+        diag_p[:, None, None, None] + 
+        diag_p[None, :, None, None] + 
+        diag_h[None, None,: , None] + 
+        diag_h[None, None, None, :]
+    ))
 
 @jax.jit
 def error_dot(t1_x_next, t1_x, t2_x_next, t2_x, t1_y_next, t1_y, t2_y_next, t2_y):
@@ -56,7 +60,7 @@ def ccsd_solver(
     verbose=False,
     ccs=False,
     dtype=jnp.float64,
-    chef: Chef = None,
+    chef: Optional[Chef] = None,
 ):
 
     f_pp, f_ph, f_hh = fock_mats
@@ -150,6 +154,9 @@ def ccsd_solver(
 
         if diff < eps:
             return float(energy), t1, t2
+
+        # NOTE: end of physics step
+        # below is DIIS logic
 
         if max_diis > 0:
             diis_t1.append(t1)
