@@ -1,6 +1,22 @@
 import jax
 import jax.numpy as jnp
 
+@jax.jit
+def add_AB(target, val):
+    return target.at[:].add(val - val.transpose(1, 0, 2, 3))
+
+@jax.jit
+def add_IJ(target, val):
+    return target.at[:].add(val - val.transpose(0, 1, 3, 2))
+
+@jax.jit
+def add_AB_IJ(target, val):
+    # val - val(ji) - val(ba) + val(ba, ji)
+    return target.at[:].add(
+        (val - val.transpose(0, 1, 3, 2)) -
+        (val.transpose(1, 0, 2, 3) - val.transpose(1, 0, 3, 2))
+    )
+
 
 @jax.jit
 def pAB(val):
