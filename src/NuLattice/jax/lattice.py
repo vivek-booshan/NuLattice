@@ -6,8 +6,6 @@ from NuLattice.utils._types import (
     LatticeSite,
     LatticeSites,
     OneBodyElement,
-    TwoBodyElement,
-    ThreeBodyElement,
     SingleParticleBasis,
 )
 
@@ -78,7 +76,7 @@ def state2index(state: LatticeState, myL: int, spin: int = 2, isospin: int = 2) 
         + state[4]
     )
 
-def site2index(site: LatticeSite, myL: int) -> int:
+def site2index(site: LatticeSite, myL: int) -> Tuple[int, ...]:
     """
     given a site list [i,j,k] this function returns the index of that state in the list
     returned by get_lattice
@@ -129,17 +127,17 @@ def right(site_location: int, myL: int) -> int:
 
 
 def Tkin(
-    lattice_sites: LatticeSites, myL: int, spin: int = 2, isospin: int = 2
+    lattice_sites: LatticeSites, L: int, spin: int = 2, isospin: int = 2
 ) -> OneBodyOperator:
     """
     Generates the Kinetic Energy operator as a OneBodyOperator (SoA).
     """
     k_stride = isospin * spin
-    j_stride = myL * k_stride
-    i_stride = myL * j_stride
+    j_stride = L * k_stride
+    i_stride = L * j_stride
 
     # Basis information
-    basis = _get_sp_basis(myL, spin, isospin)
+    basis = _get_sp_basis(L, spin, isospin)
     nstat = len(basis)
     indices = np.arange(nstat, dtype=np.int64)
 
@@ -155,7 +153,7 @@ def Tkin(
     for dim in range(3):
         neighbor_states = basis.copy()
         # Periodic shift in dimension 'dim'
-        neighbor_states[:, dim] = (neighbor_states[:, dim] + 1) % myL
+        neighbor_states[:, dim] = (neighbor_states[:, dim] + 1) % L
 
         neighbor_indices = (
             neighbor_states[:, 0] * i_stride
