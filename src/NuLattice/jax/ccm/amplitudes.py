@@ -35,6 +35,39 @@ def cond_sharding_constraint(tensor, shard):
 
 @jax.jit
 def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
+    """
+    Perform a single iteration update for the T1 (singles) amplitudes.
+
+    This function constructs the T1 residual (H1) and the effective Fock 
+    intermediates (X_pp, X_hh) to solve the T1 amplitude equation using 
+    a Jacobi-like update.
+
+    Parameters
+    ----------
+    t1 : jax.Array
+        Singles amplitudes. Shape: (p,h).
+    t2 : jax.Array
+        Doubles amplitudes. Shape: (p,p,h,h).
+    f_ph, f_pp, f_hh : jax.Array
+        Slices of the Fock matrix (PH, PP, and HH).
+    v_phph, v_phhh, v_pphh : jax.Array
+        Dense interaction potential slices.
+    v_ppph : tuple of (indices, values)
+        Sparse representation of the PPPH interaction. 
+        `indices` is (c, d, a, k), where 'a' is the target particle index.
+
+    Returns
+    -------
+    jax.Array
+        The updated T1 amplitudes.
+
+    Notes
+    -----
+    - The function constructs effective 1-body intermediates $X_{pp}$ and $X_{hh}$ 
+      which include correlations from the 2-body interaction.
+    - Sparse contribution: $H1_{ai} -= 0.5 \sum_{cdk} V_{cdak} T2_{cdki}$.
+    - The final step performs an energy denominator division for convergence.
+    """
     indices, values = v_ppph
     idx_c, idx_d, idx_a, idx_k = indices
 
@@ -70,6 +103,31 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
 
 @jax.jit
 def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh):
+    """
+    Construct the effective 1-body intermediates (X_hh, X_pp) for the T2 update.
+
+    These intermediates (sometimes called "chi" or "Fock-like" intermediates) 
+    renormalize the occupied and virtual orbital energies with information 
+    from the T-amplitudes and the 2-body potential.
+
+    Parameters
+    ----------
+    t1 : jax.Array
+        Singles amplitudes.
+    t2 : jax.Array
+        Doubles amplitudes.
+    f_pp, f_ph, f_hh : jax.Array
+        Fock matrix slices.
+    v_pphh : jax.Array
+        The Particle-Particle-Hole-Hole potential slice.
+
+    Returns
+    -------
+    X_hh : jax.Array
+        Effective hole-hole intermediate. Shape: (h, h).
+    X_pp : jax.Array
+        Effective particle-particle intermediate. Shape: (p, p).
+    """
     X_hh = -f_hh
     X_hh -= 0.5 * jnp.einsum("cdkl, cdjl -> kj", v_pphh, t2)
     X_hh -= jnp.einsum("ck, cj -> kj", f_ph, t1)
@@ -84,11 +142,44 @@ def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh):
 
 @partial(jax.jit, static_argnames=("shard_pphh",))
 def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
+    """
+    Compute T2 residual contributions from the sparse PPPH interaction.
+
+    This function implements specific diagrammatic contributions where 
+    three particles and one hole are involved in the interaction vertex.
+
+    Parameters
+    ----------
+    H2 : jax.Array
+        Current T2 residual tensor.
+    t1 : jax.Array
+        Singles amplitudes.
+    t2 : jax.Array
+        Doubles amplitudes.
+    v_ppph : tuple of (indices, values)
+        Sparse PPPH potential. Indices: (c, d, a, k).
+    shard_pphh : bool
+        Static sharding flag.
+
+    Returns
+    -------
+    jax.Array
+        Updated T2 residual.
+
+    Notes
+    -----
+    - Diagram 2: Direct coupling of V and T1 into the ppph sector.
+    - Diagram 3: Modification of T2 particle lines by a V*T1 intermediate.
+    - Diagram 4: Ring-like coupling between a sparse vertex and T2.
+    - Diagram 5 & 6: Triple-excitation mimics where T1 and T2 are 
+      coordinated by the sparse vertex.
+    """
     indices, values = v_ppph
     idx_c, idx_d, idx_a, idx_k = indices
     pnum, hnum = t1.shape
 
     # Diagram 2
+    # NOTE: cannot do AB permutation cuz term_2.ndim == 2
     term_2 = values[:, None] * t1[idx_a, :]  # (nnz, hnum)
     H2 = H2.at[idx_c, idx_d, :, idx_k].add(term_2)
     H2 = H2.at[idx_c, idx_d, idx_k, :].add(-term_2)  
@@ -135,6 +226,33 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
 
 @jax.jit
 def t2_H2_pppp(H2, t1, t2, v_pppp):
+    """
+    Compute T2 residual contributions from the sparse PPPP interaction.
+
+    Handles the "all-particle" scattering sector, involving particle-particle 
+    ladders and non-linear T1 contributions.
+
+    Parameters
+    ----------
+    H2 : jax.Array
+        Current T2 residual tensor.
+    t1, t2 : jax.Array
+        Cluster amplitudes.
+    v_pppp : tuple of (indices, values)
+        Sparse PPPP potential. Indices: (a, b, c, d).
+
+    Returns
+    -------
+    jax.Array
+        Updated T2 residual.
+
+    Notes
+    -----
+    - Diagram 1: $H2_{abij} += 0.5 \sum_{cd} V_{abcd} T2_{cdij}$ (PP-Ladder).
+      Describes pairs of excited electrons scattering into different virtual states.
+    - Diagram 2: $H2_{abij} += 0.5 P(ij) \sum_{cd} V_{abcd} T1_{ci} T1_{dj}$.
+      Describes two independent single excitations interacting to mimic a double.
+    """
     ## v_pppp dgrams
     p_idx_a, p_idx_b, p_idx_c, p_idx_d = v_pppp[0]
     values = v_pppp[1]
@@ -153,7 +271,35 @@ def t2_H2_pppp(H2, t1, t2, v_pppp):
 
 
 @jax.jit
-def t2_update(t2, X_hh, X_pp, H2):
+def t2_final_step(t2, X_hh, X_pp, H2):
+    """
+    Finalize the T2 amplitude update using the Jacobi method with intermediates.
+
+    This function applies the effective 1-body terms to the residual and 
+    performs the multi-dimensional energy denominator division.
+
+    Parameters
+    ----------
+    t2 : jax.Array
+        Current T2 amplitudes.
+    X_hh : jax.Array
+        Effective hole-hole intermediate (X_kj).
+    X_pp : jax.Array
+        Effective particle-particle intermediate (X_bc).
+    H2 : jax.Array
+        The fully constructed T2 residual (sum of all diagrams).
+
+    Returns
+    -------
+    jax.Array
+        The updated T2 amplitudes for the next iteration.
+
+    Notes
+    -----
+    The update uses the 4-index denominator:
+    $\Delta_{abij} = \epsilon_a + \epsilon_b - \epsilon_i - \epsilon_j$
+    where $\epsilon$ are the diagonal elements of the X-intermediates.
+    """
     H2 = add_AB(H2, jnp.einsum("bc, acij -> abij", X_pp, t2))
     H2 = add_IJ(H2, jnp.einsum("kj, abik -> abij", X_hh, t2))
 
@@ -416,6 +562,6 @@ def t2Iter(t1, t2, f_pp, f_ph, f_hh, v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_h
     H2 = t2_H2_pppp(H2, t1, t2, v_pppp)
 
     X_hh, X_pp = t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh)
-    t2_new = t2_update(t2, X_hh, X_pp, H2)
+    t2_new = t2_final_step(t2, X_hh, X_pp, H2)
     
     return t2_new
