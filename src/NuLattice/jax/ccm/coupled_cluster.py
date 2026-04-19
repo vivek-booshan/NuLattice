@@ -150,6 +150,7 @@ def ccsd_solver(
 
         # NOTE: update t1 AFTER t2 updates
         t1 = t1 + mixing * (t1_new - t1)
+        del t1_new, t2_new
 
         energy = ccsd_energy(f_ph, v_pphh, t2, t1)
         diff = abs(energy - prevEnergy) / max(1.0, abs(energy))
