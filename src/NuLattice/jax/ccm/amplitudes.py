@@ -1,3 +1,4 @@
+# TODO: align mesh and contraction indices optimally
 from functools import partial
 
 import jax
@@ -170,7 +171,56 @@ def t2_update(t2, X_hh, X_pp, H2):
 
 @partial(jax.jit, static_argnames=("shard_pphh",))
 def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh):
-    """Diagrams 1 to 5"""
+    """
+    Compute Diagrams 1 through 5 of the CCSD T2 amplitude residual.
+
+    This function handles the primary two-body contractions where the 
+    interaction potential couples directly to T2 or via a single T1 
+    bridge. It includes the hole-hole and particle-particle ladder 
+    terms.
+
+    Parameters
+    ----------
+    H2 : jax.Array
+        The T2 intermediate tensor (residual) to be updated. 
+        Shape: (pphh).
+    t1 : jax.Array
+        Cluster amplitudes for single excitations.
+        Shape: (ph).
+    t2 : jax.Array
+        Cluster amplitudes for double excitations.
+        Shape: (pphh).
+    v_pphh, v_phph, v_phhh, v_hhhh : jax.Array
+        Two body interactions for pphh, phph, phhh, and hhhh, respectively.
+    shard_pphh : NamedSharding
+        sharding configuration to apply sharding constraints 
+        to the pphh-sector tensors during JIT compilation.
+
+    Returns
+    -------
+    jax.Array
+        The updated H2 intermediate with contributions from diagrams 1-5.
+
+    Notes
+    -----
+    The diagrams implemented are:
+
+    - D1: 0.5 * v_{klij} * t_{abkl} (Hole-Hole Ladder)
+      Scattering of two holes into new hole states; describes the 
+      interaction of the "voids" left in the Fermi sea.
+    - D2: P(ab)P(ij) [ v_{bkcj} * t_{acik} ] (Particle-Hole Ring)
+      A "bubble" diagram where a particle and a hole exchange state; 
+      responsible for screen-like polarization effects.
+    - D3: P(ab) [ v_{bkij} * t_{ak} ] (Single-to-Double Coupling)
+      A three-hole, one-particle potential interaction colliding with 
+      a single excitation (T1) to create a double excitation.
+    - D4: 0.5 * P(ab)P(ij) [ t_{acik} * v_{cdkl} * t_{dblj} ] (PP-Ladder)
+      Two double excitations linked by a particle-particle interaction; 
+      describes pairs of excited electrons scattering off each other.
+    - D5: 0.25 * t_{cdij} * v_{cdkl} * t_{abkl} (HH-Ladder Intermediate)
+      Two double-excitations "knitted" together via the interaction 
+      of their respective occupied-space (hole) components.
+    """
     d1 = jnp.einsum("klij, abkl -> abij", v_hhhh, t2)
     d1 = cond_sharding_constraint(d1, shard_pphh)
     H2 = H2.at[:].add(0.5 * d1)
@@ -198,7 +248,50 @@ def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh):
 
 @partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
 def t2_H2_dense_part2(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph):
-    """Diagrams 6 to 10"""
+    """
+    Compute Diagrams 6 through 10 of the CCSD T2 amplitude residual.
+
+    This function focuses on mixed T1-T2 contributions and terms where the 
+    T1 amplitude modifies the hole lines of the two-body interaction.
+
+    Parameters
+    ----------
+    H2 : jax.Array
+        The T2 intermediate tensor. Shape: (pphh).
+    t1 : jax.Array
+        Cluster amplitudes for single excitations.
+    t2 : jax.Array
+        Cluster amplitudes for double excitations.
+    v_pphh, v_phph, v_phhh, v_hhhh : jax.Array
+    shard_pphh : NamedSharding
+        Sharding constraints on the pphh sector.
+    shard_phph : NamedSharding
+        Sharding constraints on the phph sector.
+
+    Returns
+    -------
+    jax.Array
+        The updated H2 intermediate with contributions from diagrams 6-10.
+
+    Notes
+    -----
+    The diagrams implemented are:
+    - D6: 0.5 * P(ab) [ t_{ak} * v_{klij} * t_{bl} ] (Double Single-Hole Scattering)
+      Two separate T1 excitations "finding each other" via a 
+      hole-hole scattering event in the potential.
+    - D7: -P(ab)P(ij) [ t_{ak} * v_{bkci} * t_{cj} ] (Single-Excitation Ring)
+      Two T1 amplitudes coupled by a particle-hole interaction, 
+      creating a loop that contributes to the double-excitation.
+    - D8: -P(ij) [ v_{cikl} * t_{ck} * t_{ablj} ] (Occupied Line Modification)
+      T1 modifies a hole line before it participates in a T2 
+      double excitation; a form of orbital renormalization.
+    - D9: -P(ab)P(ij) [ v_{cikl} * t_{al} * t_{bcjk} ] (Particle-Hole Exchange)
+      A single and double excitation cross-linked by a potential 
+      term that swaps a particle and a hole index.
+    - D10: 0.5 * P(ij) [ v_{cjkl} * t_{ci} * t_{abkl} ] (Hole Line Renormalization)
+      A T1 excitation "plugging" one of the hole lines of a 
+      double excitation through a three-hole interaction vertex.
+    """
     d6_int = jnp.einsum("ak, klij -> alij", t1, v_hhhh)
     d6 = jnp.einsum("alij, bl -> abij", d6_int, t1)
     d6 = cond_sharding_constraint(d6, shard_pphh)
@@ -229,7 +322,53 @@ def t2_H2_dense_part2(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, sh
 
 @partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
 def t2_H2_dense_part3(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph):
-    """Diagrams 11 to 15"""
+    """
+    Compute Diagrams 11 through 15 of the CCSD T2 amplitude residual.
+
+    This function handles the highest-order non-linear contributions, 
+    specifically terms that are cubic (T1^3) and quartic (T1^4) in 
+    the single-excitation amplitudes.
+
+    Parameters
+    ----------
+    H2 : jax.Array
+        The T2 intermediate tensor. Shape: (n_virt, n_virt, n_occ, n_occ).
+    t1 : jax.Array
+        Cluster amplitudes for single excitations.
+    t2 : jax.Array
+        Cluster amplitudes for double excitations.
+    v_pphh, v_phph, v_phhh, v_hhhh : jax.Array
+    shard_pphh : NamedSharding
+        Sharding constraints on the pphh sector.
+    shard_phph : NamedSharding
+        Sharding constraints on the phph sector.
+
+    Returns
+    -------
+    jax.Array
+        The updated H2 intermediate with contributions from diagrams 11-15.
+
+    Notes
+    -----
+    These diagrams are computed via factorization into intermediates to 
+    avoid XLA gather calls.
+
+    - D11: 0.5 * P(ab)P(ij) [ v_{cjkl} * t_{ci} * t_{ak} * t_{bl} ] (Triple Singles)
+      Three separate T1 amplitudes coordinated by a potential interacting 
+      with one particle and three hole states.
+    - D12: 0.25 * P(ij) [ v_{cdkl} * t_{ci} * t_{dj} * t_{abkl} ] (Double-Singles Hole Coupling)
+      Two T1 excitations modifying the hole lines of a T2 amplitude 
+      via a particle-particle interaction.
+    - D13: 0.25 * P(ab) [ t_{cdij} * v_{cdkl} * t_{ak} * t_{bl} ] (Double-Singles Particle Coupling)
+      Two T1 amplitudes modifying the particle lines of a T2 
+      double excitation via particle-particle scattering.
+    - D14: P(ab)P(ij) [ t_{adkj} * v_{cdkl} * t_{ci} * t_{bl} ] (Braid Interaction)
+      A double excitation and two single excitations "braided" 
+      together by the particle-particle interaction potential.
+    - D15: 0.25 * P(ab)P(ij) [ v_{cdkl} * t_{ci} * t_{dj} * t_{ak} * t_{bl} ] (Quartic Singles)
+      The highest order term; four T1 amplitudes coordinated by one 
+      two-body interaction to produce a double-excitation effect.
+    """
     d11_int1 = jnp.einsum("cjkl, ci -> jkli", v_phhh, t1) 
     d11_int2 = jnp.einsum("jkli, ak -> alij", d11_int1, t1) 
     d11 = jnp.einsum("alij, bl -> abij", d11_int2, t1)
@@ -264,6 +403,8 @@ def t2_H2_dense_part3(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, sh
     return H2
 
 
+# NOTE: must not jit to avoid bad XLA --> big mallocs
+# split kernels to keep it tight and clean
 def t2Iter(t1, t2, f_pp, f_ph, f_hh, v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph):
     H2 = v_pphh
 
