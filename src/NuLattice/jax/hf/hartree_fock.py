@@ -1,7 +1,6 @@
 from typing import Tuple
 import jax
 import jax.numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec as P
 from functools import partial
 
 def init_density(nstat: int, hole: Tuple[int]):
@@ -17,10 +16,10 @@ def contract_2nf_fused(indices, values, dens):
     n = dens.shape[0]
     
     # Compute the 4 permutation updates
-    t1 = values * dens[q, s]
+    t1 = +values * dens[q, s]
     t2 = -values * dens[p, s]
     t3 = -values * dens[q, r]
-    t4 = values * dens[p, r]
+    t4 = +values * dens[p, r]
     
     # Concatenate updates and target indices to force a single Atomic Scatter
     updates = jnp.concatenate([t1, t2, t3, t4], axis=0)
@@ -69,9 +68,6 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix):
     gamma = contract_2nf_fused(v2_idx, v2_val, dens)
     omega = contract_3nf_fused(w3_idx, w3_val, dens)
 
-    # CRITICAL MULTI-GPU FIX: Force perfect Hermiticity.
-    # Distributed accumulation introduces floating point noise where H[i,j] != H[j,i]
-    # jnp.linalg.eigh will fail to converge if the matrix is slightly asymmetric.
     gamma = 0.5 * (gamma + gamma.T)
     omega = 0.5 * (omega + omega.T)
 
@@ -83,6 +79,7 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix):
     e_omega = jnp.sum(omega * dens)
     energy = e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega
 
+    # NOTE: current scaling bottleneck; eigh expects single device; Davidson solver
     vals, vecs = jnp.linalg.eigh(hf_ham)
     occ = vecs[:, :npart]
     new_dens = occ @ occ.T
@@ -94,19 +91,13 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix):
 
 def solve_HF(op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef=None):
     if chef is not None:
-        mesh = chef.mesh
-        # 1. REPLICATED DATA (P()): Every GPU needs a full copy of the small matrices
-        # Sharding these causes JAX to distribute the eigensolver, which destroys performance.
-        rep_sharding = NamedSharding(mesh, P())
-        h1_dense = jax.device_put(op1.to_dense(), rep_sharding)
-        _dens = jax.device_put(dens, rep_sharding)
+        h1_dense = chef.prepare(op1.to_dense())
+        _dens = chef.prepare(dens, rank=0)
 
-        # 2. SHARDED DATA (P("data")): Distribute the massive interaction lists across GPUs
-        data_sharding = NamedSharding(mesh, P("data"))
-        v2_idx = jax.device_put(op2.indices, data_sharding)
-        v2_val = jax.device_put(op2.values, data_sharding)
-        w3_idx = jax.device_put(op3.indices, data_sharding)
-        w3_val = jax.device_put(op3.values, data_sharding)
+        v2_idx = chef.prepare(op2.indices, rank=0)
+        v2_val = chef.prepare(op2.values, rank=0)
+        w3_idx = chef.prepare(op3.indices, rank=0)
+        w3_val = chef.prepare(op3.values, rank=0)
     else:
         # Avoid jnp.asarray if they are already jax arrays, just in case
         h1_dense = jnp.array(op1.to_dense())
