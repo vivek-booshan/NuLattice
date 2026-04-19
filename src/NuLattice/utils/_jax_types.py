@@ -1,7 +1,9 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
+
 from jax.experimental.sparse import BCOO
-from jax.sharding import NamedSharding, PartitionSpec as P, Mesh
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 
 class Operator:
@@ -105,16 +107,32 @@ class ThreeBodyOperator(Operator):
         return 6
 
 class Chef:
-    def __init__(self):
-        self.mesh = Mesh(jax.devices(), axis_names=("data",))
+    def __init__(self, num_nodes=1, num_gpus=1):
+        self.mesh = jax.make_mesh(axis_shapes=(num_nodes, num_gpus), axis_names=("nodes", "gpus"))
 
-    def prepare(self, arr: jnp.array, rank: int = None):
+    def prepare(self, arr, rank: int = None, spec: NamedSharding = None):
         r = rank if rank is not None else arr.ndim 
-        if r == 0: 
-            spec = P() # alternatively can be used for replication
-        elif r == 1:
-            spec = P('data')
-        else:
-            spec = P("data", *([None] * (r - 1)))
 
-        return jax.device_put(arr, NamedSharding(self.mesh, spec))
+        if spec is not None:
+            spec = spec
+        else:
+            if r == 0: 
+                spec = P() # alternatively can be used for replication
+            elif r == 1:
+                spec = P(('nodes', 'gpus')) # 1d array should be split across everything
+            else:
+                spec = P("nodes", "gpus", *([None] * (r - 2)))
+
+        sharding = NamedSharding(self.mesh, spec)
+
+        # cpu check
+        if isinstance(arr, np.ndarray):
+            if arr.nbytes > 1e9: # only if > 1 gb
+                # calculate bounding box per gpu, slice on cpu, move to gpu
+                return jax.make_array_from_callback(
+                    arr.shape,
+                    sharding,
+                    lambda idx: arr[idx])
+            else:
+                return jax.device_put(arr, sharding)
+        return jax.device_put(arr, sharding)

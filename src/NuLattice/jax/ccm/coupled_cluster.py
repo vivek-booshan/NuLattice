@@ -3,12 +3,12 @@ from collections import deque
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax.sharding import PartitionSpec as P, NamedSharding
 
 from NuLattice.utils._jax_types import Chef
 
-from .amplitudes import t1Iter, t2_X, t2_H2, t2_update
-
-# TODO: shard/handle t1 and t2 initialization
+from .amplitudes import t1Iter, t2Iter
 
 @jax.jit
 def ccsd_energy(f_ph, v_pphh, t2, t1):
@@ -20,10 +20,7 @@ def ccsd_energy(f_ph, v_pphh, t2, t1):
 
 @jax.jit
 def t1Init(f_ph, f_pp, f_hh, delta):
-    return f_ph / (delta + (
-        - jnp.diag(f_pp)[:, None]
-        + jnp.diag(f_hh)[None, :]
-    ))
+    return f_ph / (delta + (-jnp.diag(f_pp)[:, None] + jnp.diag(f_hh)[None, :]))
 
 
 @jax.jit
@@ -31,22 +28,27 @@ def t2Init(f_pp, f_hh, v_pphh, delta):
     diag_h = jnp.diag(f_hh)
     diag_p = -jnp.diag(f_pp)
 
-    return v_pphh / (delta + (
-        diag_p[:, None, None, None] + 
-        diag_p[None, :, None, None] + 
-        diag_h[None, None,: , None] + 
-        diag_h[None, None, None, :]
-    ))
+    return v_pphh / (
+        delta
+        + (
+            diag_p[:, None, None, None]
+            + diag_p[None, :, None, None]
+            + diag_h[None, None, :, None]
+            + diag_h[None, None, None, :]
+        )
+    )
+
 
 @jax.jit
 def error_dot(t1_x_next, t1_x, t2_x_next, t2_x, t1_y_next, t1_y, t2_y_next, t2_y):
     e1x = t1_x_next - t1_x
     e2x = t2_x_next - t2_x
-    
+
     e1y = t1_y_next - t1_y
     e2y = t2_y_next - t2_y
-    
+
     return jnp.sum(e1x * e1y) + jnp.sum(e2x * e2y)
+
 
 def ccsd_solver(
     fock_mats,
@@ -69,13 +71,15 @@ def ccsd_solver(
     v_pppp = (v_pppp_sparse.indices.T, v_pppp_sparse.values)
     v_ppph = (v_ppph_sparse.indices.T, v_ppph_sparse.values)
 
+    shard_pphh = None
+    shard_phph = None
     if chef is not None:
         f_pp = chef.prepare(f_pp)
         f_ph = chef.prepare(f_ph)
         f_hh = chef.prepare(f_hh, rank=0)  # replicate
 
         v_pphh = chef.prepare(v_pphh)
-        v_phph = chef.prepare(v_phph)
+        v_phph = chef.prepare(v_phph, spec=P("nodes", None, "gpus", None))
         v_phhh = chef.prepare(v_phhh)
         v_hhhh = chef.prepare(v_hhhh, rank=0)  # replicate
 
@@ -89,13 +93,16 @@ def ccsd_solver(
             chef.prepare(v_ppph[1], rank=0),
         )
 
+        shard_pphh = NamedSharding(chef.mesh, P("nodes", "gpus", None, None))
+        shard_phph = NamedSharding(chef.mesh, P("nodes", None, "gpus", None))
+
     t1 = (
         t1Init(f_ph, f_pp, f_hh, delta)
         if t1initial is None
-        else jnp.array(t1initial, dtype) # possible source of memory issue
+        else jnp.zeros_like(t1initial, dtype)  # possible source of memory issue
     )
     t2 = (
-        jnp.zeros_like(v_pphh) # possible source of memory issue
+        jnp.zeros_like(v_pphh)  # zeros_like should shard like pphh
         if (ccs or t1initial is not None)
         else t2Init(f_pp, f_hh, v_pphh, delta)
     )
@@ -124,26 +131,24 @@ def ccsd_solver(
         )
 
         if not ccs:
-            X_hh, X_pp = t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh)
-            X_pp.block_until_ready()  # force intermediate dealloc
-
-            H2 = t2_H2(
+            t2_new = t2Iter(
                 t1,
                 t2,
+                f_pp,
+                f_ph,
+                f_hh,
                 v_pppp,
                 v_ppph,
                 v_pphh,
                 v_phph,
                 v_phhh,
                 v_hhhh,
+                shard_pphh,
+                shard_phph,
             )
-            H2.block_until_ready()  # force intermediate dealloc
-
-            t2_new = t2_update(t2, X_hh, X_pp, H2)
-            del X_hh, X_pp, H2
             t2 = t2 + mixing * (t2_new - t2)
 
-        # NOTE: update t1 AFTER t2 updates 
+        # NOTE: update t1 AFTER t2 updates
         t1 = t1 + mixing * (t1_new - t1)
 
         energy = ccsd_energy(f_ph, v_pphh, t2, t1)
@@ -169,10 +174,10 @@ def ccsd_solver(
                 for x in range(size):
                     for y in range(x, size):
                         val = error_dot(
-                            diis_t1[x+1], diis_t1[x],
-                            diis_t2[x+1], diis_t2[x],
-                            diis_t1[y+1], diis_t1[y],
-                            diis_t2[y+1], diis_t2[y],
+                            diis_t1[x + 1], diis_t1[x],
+                            diis_t2[x + 1], diis_t2[x],
+                            diis_t1[y + 1], diis_t1[y],
+                            diis_t2[y + 1], diis_t2[y],
                         )
 
                         B = B.at[x, y].set(val)
@@ -189,7 +194,7 @@ def ccsd_solver(
                 rhs = rhs.at[size].set(-1.0)
 
                 try:
-                    c = jnp.linalg.solve(A, rhs)[:size]
+                    c = np.linalg.solve(A, rhs)[:size]
                     t1_new_diis = jnp.zeros_like(t1)
                     t2_new_diis = jnp.zeros_like(t2)
 
@@ -204,8 +209,10 @@ def ccsd_solver(
 
                 diis_t1.clear()
                 diis_t2.clear()
-                diis_t1.append(t1)
-                diis_t2.append(t2)
+                diis_t1.append(t1_new_diis)
+                diis_t2.append(t2_new_diis)
+
+                # NOTE: if mem issue; move to np; jax.experimental.multihost_utils.process_allgather to append cpu data back to gpu
 
         if abs(energy) > 1e10 or jnp.isnan(energy):
             print("Diverged.")
