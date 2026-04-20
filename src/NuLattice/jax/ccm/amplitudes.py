@@ -65,7 +65,7 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
     -----
     - The function constructs effective 1-body intermediates $X_{pp}$ and $X_{hh}$ 
       which include correlations from the 2-body interaction.
-    - Sparse contribution: $H1_{ai} -= 0.5 \sum_{cdk} V_{cdak} T2_{cdki}$.
+    - Sparse contribution: $H1_{ai} -= 0.5 \\sum_{cdk} V_{cdak} T2_{cdki}$.
     - The final step performs an energy denominator division for convergence.
     """
     indices, values = v_ppph
@@ -248,9 +248,9 @@ def t2_H2_pppp(H2, t1, t2, v_pppp):
 
     Notes
     -----
-    - Diagram 1: $H2_{abij} += 0.5 \sum_{cd} V_{abcd} T2_{cdij}$ (PP-Ladder).
+    - Diagram 1: $H2_{abij} += 0.5 \\sum_{cd} V_{abcd} T2_{cdij}$ (PP-Ladder).
       Describes pairs of excited electrons scattering into different virtual states.
-    - Diagram 2: $H2_{abij} += 0.5 P(ij) \sum_{cd} V_{abcd} T1_{ci} T1_{dj}$.
+    - Diagram 2: $H2_{abij} += 0.5 P(ij) \\sum_{cd} V_{abcd} T1_{ci} T1_{dj}$.
       Describes two independent single excitations interacting to mimic a double.
     """
     ## v_pppp dgrams
@@ -297,7 +297,7 @@ def t2_final_step(t2, X_hh, X_pp, H2):
     Notes
     -----
     The update uses the 4-index denominator:
-    $\Delta_{abij} = \epsilon_a + \epsilon_b - \epsilon_i - \epsilon_j$
+    $\\Delta_{abij} = \epsilon_a + \epsilon_b - \epsilon_i - \epsilon_j$
     where $\epsilon$ are the diagonal elements of the X-intermediates.
     """
     H2 = add_AB(H2, jnp.einsum("bc, acij -> abij", X_pp, t2))
