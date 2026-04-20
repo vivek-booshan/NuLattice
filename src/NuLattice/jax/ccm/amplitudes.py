@@ -22,9 +22,10 @@ def add_AB_IJ(target, val):
 
     val - val(ji) - val(ba) + val(ba, ji)
     """
-    return target.at[:].add(
-        (val - val.transpose(0, 1, 3, 2)) -
-        (val.transpose(1, 0, 2, 3) - val.transpose(1, 0, 3, 2))
+    return (target.at[:].add(val)
+        .at[:].add(-val.transpose(0, 1, 3, 2))
+        .at[:].add(-val.transpose(1, 0, 2, 3))
+        .at[:].add(+val.transpose(1, 0, 3, 2))
     )
 
 
@@ -179,7 +180,7 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
     pnum, hnum = t1.shape
 
     # Diagram 2
-    # NOTE: cannot do AB permutation cuz term_2.ndim == 2
+    # NOTE: cannot do permutation cuz term_2.ndim == 2
     term_2 = values[:, None] * t1[idx_a, :]  # (nnz, hnum)
     H2 = H2.at[idx_c, idx_d, :, idx_k].add(term_2)
     H2 = H2.at[idx_c, idx_d, idx_k, :].add(-term_2)  
