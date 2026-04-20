@@ -3,7 +3,7 @@ name = "nulattice"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12" # only for jax support
 dependencies = [
     "numpy>=1.24.4",
     "opt-einsum>=3.4.0",
@@ -26,5 +26,27 @@ dev = [
     "numba",
     "matplotlib>=3.7.5",
     "pytest-memray>=1.8.0",
-    "torch>=2.0.0", # this does require torch.compile
 ]
+
+torch = [
+    "torch>2.0.0",
+]
+
+jax = [
+    "jax"
+]
+
+rocm = [
+    "pytorch-triton-rocm"
+    "jax[rocm]==0.5.0",
+]
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.3"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-rocm", marker = "sys_platform == 'linux'" }
+pytorch-triton-rocm = { index = "pytorch-rocm", marker = "sys_platform == 'linux'" }
+
