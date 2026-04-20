@@ -1,20 +1,37 @@
-from  NuLattice.utils.constants import HBARC, MASS
-
-# old types
-from NuLattice.utils._types import (
-    LatticeState,
-    LatticeSite,
-    LatticeSites,
-    OneBodyElement,
-    SingleParticleBasis,
-)
-
-# new types
-from NuLattice.utils._jax_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
+from typing import TypeAlias, List, Tuple
+from itertools import combinations
 
 import numpy as np
-from itertools import combinations
-from typing import Tuple
+
+from  NuLattice.utils.constants import HBARC, MASS
+from NuLattice.utils._jax_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
+
+
+
+LatticeState: TypeAlias = List[int]
+"""
+Represents a single-particle state on the 3D lattice.
+Format: [i, j, k, tz, sz] where i,j,k are spatial and tz,sz are isospin/spin.
+"""
+
+SingleParticleBasis: TypeAlias = List[LatticeState]
+"""
+A list containing all single-particle states in the basis.
+"""
+
+LatticeSite: TypeAlias = List[Tuple[int, int, int]]
+"""
+Represents a spatial coordinate on the 3D lattice.
+Format: (i, j, k)
+"""
+
+LatticeSites: TypeAlias = List[LatticeSite]
+
+OneBodyElement: TypeAlias = Tuple[int, int, float]
+"""
+A single-particle matrix element in sparse format.
+Format: (p, q, value) representing <p|O|q>.
+"""
 
 
 def phys_unit(a_lat: float) -> float:
