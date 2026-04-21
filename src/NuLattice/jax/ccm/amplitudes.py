@@ -298,8 +298,8 @@ def t2_final_step(t2, X_hh, X_pp, H2):
     Notes
     -----
     The update uses the 4-index denominator:
-    $\\Delta_{abij} = \epsilon_a + \epsilon_b - \epsilon_i - \epsilon_j$
-    where $\epsilon$ are the diagonal elements of the X-intermediates.
+    $\\Delta_{abij} = \\epsilon_a + \\epsilon_b - \\epsilon_i - \\epsilon_j$
+    where $\\epsilon$ are the diagonal elements of the X-intermediates.
     """
     H2 = add_AB(H2, jnp.einsum("bc, acij -> abij", X_pp, t2))
     H2 = add_IJ(H2, jnp.einsum("kj, abik -> abij", X_hh, t2))
