@@ -8,12 +8,12 @@ from jax.lax import with_sharding_constraint
 @jax.jit
 def add_AB(target, val):
     """target inplace mutation of AB permutation of val"""
-    return target.at[:].add(val - val.transpose(1, 0, 2, 3))
+    return target.at[:].add(val).at[:].add(-val.transpose(1, 0, 2, 3))
 
 @jax.jit
 def add_IJ(target, val):
     """target inplace mutation of IJ permutation of val"""
-    return target.at[:].add(val - val.transpose(0, 1, 3, 2))
+    return target.at[:].add(val).at[:].add(-val.transpose(0, 1, 3, 2))
 
 @jax.jit
 def add_AB_IJ(target, val):
