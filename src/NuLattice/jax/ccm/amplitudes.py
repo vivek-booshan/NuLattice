@@ -25,6 +25,7 @@ def add_AB_IJ(target, val):
 
     val - val(ji) - val(ba) + val(ba, ji)
     """
+    # NOTE: must be (a - b) - (c - d)!!! otherwise memory err holding all 4
     return target.at[:].add(
         (val - val.transpose(0, 1, 3, 2))
         - (val.transpose(1, 0, 2, 3) - val.transpose(1, 0, 3, 2))
