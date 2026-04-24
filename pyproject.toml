@@ -37,7 +37,7 @@ jax = [
 ]
 
 rocm = [
-    "pytorch-triton-rocm"
+    "pytorch-triton-rocm",
     "jax[rocm]==0.5.0",
 ]
 
