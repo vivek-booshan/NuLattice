@@ -1,3 +1,4 @@
+# TODO: shard or cast diis logic to cpu
 from typing import Optional
 from collections import deque
 
@@ -12,6 +13,37 @@ from .amplitudes import t1Iter, t2Iter
 
 @jax.jit
 def ccsd_energy(f_ph, v_pphh, t2, t1):
+    """
+    Calculate the CCSD correlation energy.
+
+    This function computes the electronic correlation energy contribution 
+    from the singles (T1) and doubles (T2) amplitudes using the standard 
+    Coupled Cluster energy expression.
+
+    Parameters
+    ----------
+    f_ph : jax.Array
+        The particle-hole block of the Fock matrix. Shape: (v, o).
+    v_pphh : jax.Array
+        The particle-particle-hole-hole block of the interaction potential. 
+        Shape: (v, v, o, o).
+    t2 : jax.Array
+        The current doubles amplitudes. Shape: (v, v, o, o).
+    t1 : jax.Array
+        The current singles amplitudes. Shape: (v, o).
+
+    Returns
+    -------
+    jax.Array
+        The scalar correlation energy value.
+
+    Notes
+    -----
+    The energy is calculated as:
+    - e1: f_{ai} * t_{ai} (Singles contribution)
+    - e2: 0.25 * v_{abij} * t_{abij} (Doubles contribution)
+    - e3: 0.5 * v_{abij} * t_{ai} * t_{bj} (Singles-coupling contribution)
+    """
     e_1 = jnp.einsum("ai,ai->", f_ph, t1)
     e_2 = 0.25 * jnp.einsum("abij,abij->", v_pphh, t2)
     e_3 = 0.5 * jnp.einsum("abij,ai,bj->", v_pphh, t1, t1)
@@ -20,11 +52,43 @@ def ccsd_energy(f_ph, v_pphh, t2, t1):
 
 @jax.jit
 def t1Init(f_ph, f_pp, f_hh, delta):
+    """
+    Initialize the T1 amplitudes using the Moller-Plesset (MP2) guess.
+
+    Parameters
+    ----------
+    f_ph, f_pp, f_hh : jax.Array
+        Fock matrix slices.
+    delta : float
+        Energy shift parameter to avoid division by zero or regularize convergence.
+
+    Returns
+    -------
+    jax.Array
+        Initial guess for T1 amplitudes.
+    """
     return f_ph / (delta + (-jnp.diag(f_pp)[:, None] + jnp.diag(f_hh)[None, :]))
 
 
 @jax.jit
 def t2Init(f_pp, f_hh, v_pphh, delta):
+    """
+    Initialize the T2 amplitudes using the Moller-Plesset (MP2) guess.
+
+    Parameters
+    ----------
+    f_pp, f_hh : jax.Array
+        Fock matrix slices used to build the energy denominator.
+    v_pphh : jax.Array
+        Interaction potential used as the numerator for the guess.
+    delta : float
+        Energy shift parameter.
+
+    Returns
+    -------
+    jax.Array
+        Initial guess for T2 amplitudes (MP2-like).
+    """
     diag_h = jnp.diag(f_hh)
     diag_p = -jnp.diag(f_pp)
 
@@ -64,7 +128,57 @@ def ccsd_solver(
     dtype=jnp.float64,
     chef: Optional[Chef] = None,
 ):
+    """
+    Solver for the Coupled Cluster Singles and Doubles (CCSD) equations.
 
+    This solver manages the iterative process, including amplitude updates, 
+    energy evaluation, DIIS convergence acceleration, and distributed 
+    data sharding across nodes/GPUs.
+
+    Parameters
+    ----------
+    fock_mats : tuple of jax.Array
+        Fock matrix blocks (f_pp, f_ph, f_hh).
+    two_body_int : tuple of jax.Array
+        Two-body interaction blocks (v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh).
+    t1initial : jax.Array, optional
+        Starting guess for T1 amplitudes. If None, uses T1Init.
+    eps : float
+        Convergence threshold for the energy difference between iterations.
+    maxSteps : int
+        Maximum number of iterations allowed.
+    max_diis : int
+        Number of previous amplitudes to store for DIIS extrapolation. 
+        Set to 0 to disable DIIS.
+    delta : float
+        Energy shift added to the denominators.
+    mixing : float
+        Damping parameter for amplitude updates (0.5 = 50% new amplitude).
+    verbose : bool
+        If True, prints iteration information and energy to stdout.
+    ccs : bool
+        If True, restricts the calculation to Singles only (CCS).
+    dtype : jnp.dtype
+        Floating point precision (default: float64).
+    chef : Chef, optional
+        A distributed orchestration object used to shard and prepare 
+        data across multiple devices.
+
+    Returns
+    -------
+    energy : float
+        Final correlation energy (scaled by physical units).
+    t1 : jax.Array
+        Converged singles amplitudes.
+    t2 : jax.Array
+        Converged doubles amplitudes.
+
+    Notes
+    -----
+    The solver uses Direct Inversion in the Iterative Subspace (DIIS) to 
+    accelerate convergence by finding a linear combination of previous 
+    amplitudes that minimizes the norm of the residual vector.
+    """
     f_pp, f_ph, f_hh = fock_mats
     v_pppp_sparse, v_ppph_sparse, v_pphh, v_phph, v_phhh, v_hhhh = two_body_int
 
