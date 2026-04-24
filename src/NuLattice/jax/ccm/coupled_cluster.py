@@ -4,7 +4,6 @@ from collections import deque
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax.sharding import PartitionSpec as P, NamedSharding
 
 from NuLattice.utils._jax_types import Chef
@@ -309,7 +308,7 @@ def ccsd_solver(
                 rhs = rhs.at[size].set(-1.0)
 
                 try:
-                    c = np.linalg.solve(A, rhs)[:size]
+                    c = jnp.linalg.solve(A, rhs)[:size]
                     t1_new_diis = jnp.zeros_like(t1)
                     t2_new_diis = jnp.zeros_like(t2)
 
