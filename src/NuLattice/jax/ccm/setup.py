@@ -214,17 +214,17 @@ def get_norm_ordered_ham(
 
 
 def get_norm_ord_int(
-    thisL: int,
+    L: int,
     holes: int,
     vT1: float,
     vS1: float,
     str_3NF: float = 0,
     dtype=jnp.float64,
 ):
-    lattice = lat.get_lattice(thisL)
-    myTkin = lat.Tkin(lattice, thisL)
-    mycontact = lat.contacts(vT1, vS1, lattice, thisL)
-    hole, part = lat.states2PHSpace(holes, thisL)
+    lattice = lat.get_lattice(L)
+    myTkin = lat.Tkin(lattice, L)
+    mycontact = lat.contacts(vT1, vS1, lattice, L)
+    hole, part = lat.states2PHSpace(holes, L)
 
     hnum, pnum = len(hole), len(part)
     nstat = hnum + pnum
@@ -238,7 +238,7 @@ def get_norm_ord_int(
     )
 
     if str_3NF != 0:
-        my3body = lat.NNNcontact(str_3NF, lattice, thisL)
+        my3body = lat.NNNcontact(str_3NF, lattice, L)
         w_ops = tbu.get_3NF(part, hole, my3body.to_list())
 
         dum_fock = tbu.get_3NF_fock(hnum, pnum, w_ops[6], w_ops[7], w_ops[8])
@@ -276,3 +276,23 @@ def get_norm_ord_int(
         vacEn = get_ref_energy(fock_mats[2], raw_2b[5], None)
 
     return vacEn, fock_mats, raw_2b
+
+def get_sector_masks(part: np.ndarray, hole: np.ndarray, L: int, spin: int = 2, isospin: int = 2):
+    """
+    Generates 1D binary projection masks for the Particle and Hole spaces.
+    These are used to dynamically filter the universal stamp interactions.
+    """
+    nstat = (L**3) * spin * isospin
+    
+    # 1. Hole Mask (1.0 if the state is occupied, 0.0 otherwise)
+    mask_H_np = np.zeros(nstat, dtype=np.float64)
+    if len(hole) > 0:
+        mask_H_np[hole] = 1.0
+        
+    # 2. Particle Mask (1.0 if the state is unoccupied, 0.0 otherwise)
+    mask_P_np = np.zeros(nstat, dtype=np.float64)
+    if len(part) > 0:
+        mask_P_np[part] = 1.0
+        
+    # Convert to immutable JAX arrays for the GPU solver
+    return jnp.array(mask_P_np), jnp.array(mask_H_np)
