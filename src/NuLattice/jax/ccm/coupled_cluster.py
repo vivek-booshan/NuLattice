@@ -339,12 +339,7 @@ def ccsd_solver(
     return float(energy), t1, t2
 
 def stamp_solver(
-    L,
-    stamp_1b,
-    stamp_2b,
-    stamp_3b,
-    mask_p,
-    mask_h,
+    stamper,
     fock_mats,
     two_body_int,
     t1initial=None,
@@ -409,6 +404,10 @@ def stamp_solver(
     accelerate convergence by finding a linear combination of previous 
     amplitudes that minimizes the norm of the residual vector.
     """
+    L = stamper.L
+    mask_p = stamper.pmask
+    stamp_2b = stamper.two_body
+
     f_pp, f_ph, f_hh = fock_mats
     v_pppp_sparse, v_ppph_sparse, v_pphh, v_phph, v_phhh, v_hhhh = two_body_int
 
@@ -477,7 +476,8 @@ def stamp_solver(
             f_ph,
             f_pp,
             f_hh,
-            stamp_2b.rules,
+            jnp.array(stamp_2b.deltas),
+            jnp.array(stamp_2b.weights),
             is_p,
             local_map,
             L,
