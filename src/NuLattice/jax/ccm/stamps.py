@@ -9,12 +9,11 @@ from NuLattice.utils._jax_types import (
     ThreeBodyOperator,
 )
 
-@dataclass
+@dataclass(frozen=True)
 class Stamp:
     deltas: np.ndarray
     weights: np.ndarray
-
-    # tuple unpacking
+ # tuple unpacking
     def __iter__(self):
         return iter(astuple(self))
 
@@ -22,6 +21,8 @@ class Stamp:
     def __getitem__(self, index):
         return astuple(self)[index]
 
+    def __hash__(self):
+        return hash(self.rules)
     @property
     def rules(self):
         """
