@@ -3,7 +3,7 @@ import argparse
 import NuLattice.jax.lattice as lat
 import NuLattice.utils.references as ref
 import NuLattice.jax.ccm as ccm
-from NuLattice.jax.ccm import stamps, stamp_setup as ss, setup
+from NuLattice.jax.ccm import stamps, stamp_operator_utils as sou
 from NuLattice.utils._jax_types import Chef
 
 
@@ -100,35 +100,35 @@ def main():
 
     spin, isospin = 2, 2
     stamper = stamps.Stamper(args.L, spin, isospin)
-    stamp_1b, stamp_2b, stamp_3b = stamper.stamp(args.vT1, args.vS1, args.cE)
+
+    stamper.stamp(args.vT1, args.vS1, args.cE)
+    stamp_1b, stamp_2b, stamp_3b = stamper.one_body, stamper.two_body, stamper.three_body
 
     for i, stamp in enumerate([stamp_1b, stamp_2b, stamp_3b]):
         print(f"{i+1} Body Stamp")
         print(f"Deltas: {stamp.deltas.shape}")
         print(f"Weights: {stamp.weights.shape}")
+        print("")
 
     # reference state
     ref_state = ref.ref_16O_gs
 
-    mask_p, mask_h, energy = ss.normal_order_masks(
-        args.L, ref_state, stamp_1b, stamp_2b, stamp_3b, spin, isospin
-    )
-    refEn, fock_mats, two_body_int = ss.stamp_to_legacy_wrapper(
-        args.L, ref_state, stamp_1b, stamp_2b, stamp_3b, True, spin, isospin
+    mask_p, mask_h = stamper.normal_order_masks(ref_state)
+    energy = stamper.get_reference_energy()
+
+    refEn, fock_mats, two_body_int = sou.normal_order_tensors_from_stamper(
+        stamper,
+        ref_state,
+        NO2B=True,
     )
 
     print(f"Stamp energy: {energy * phys_unit} MeV")
 
-    print(f"Energy of reference: {refEn * phys_unit} MeV")
+    # print(f"Energy of reference: {refEn * phys_unit} MeV")
 
     # need to integrate with Stamp and Stamper
     corrEn, t1, t2 = ccm.coupled_cluster.stamp_solver(
-        args.L,
-        stamp_1b,
-        stamp_2b,
-        stamp_3b,
-        mask_p,
-        mask_h,
+        stamper,
         fock_mats,
         two_body_int,
         eps=args.eps,
