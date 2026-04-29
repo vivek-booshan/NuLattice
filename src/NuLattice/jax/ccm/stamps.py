@@ -1,5 +1,7 @@
+from dataclasses import dataclass, astuple
+
 import numpy as np
-from typing import Tuple
+import jax.numpy as jnp
 
 from NuLattice.utils._jax_types import (
     OneBodyOperator,
@@ -7,93 +9,122 @@ from NuLattice.utils._jax_types import (
     ThreeBodyOperator,
 )
 
-def stamp_one_body(spin: int, isospin: int) -> Tuple[np.ndarray, np.ndarray]:
-    deltas = []
-    weights = []
-    I4 = np.eye(spin * isospin, dtype=np.float64)
+@dataclass
+class Stamp:
+    deltas: np.ndarray
+    weights: np.ndarray
 
-    # On-site diagonal
-    deltas.append([0, 0, 0])
-    weights.append(6.0 * I4)
+    # tuple unpacking
+    def __iter__(self):
+        return iter(astuple(self))
 
-    # Nearest-neighbor hopping (3D)
-    for dim in range(3):
-        for direction in [1, -1]:
-            shift = [0, 0, 0]
-            shift[dim] = direction
-            deltas.append(shift)
-            weights.append(-1.0 * I4)
+    # indexing
+    def __getitem__(self, index):
+        return astuple(self)[index]
 
-    return np.array(deltas, dtype=np.int32), np.array(weights, dtype=np.float64)
+    @property
+    def rules(self):
+        """
+        Converts dense stamp matrices into a static list of valid scattering rules.
+        This prevents JAX from trying to compile dynamic NaN-filtering logic.
+        """
+        rules = []
+        for d, W in zip(self.deltas, self.weights):
+            nz = np.where(~np.isnan(W))
+            for combo in zip(*nz):
+                # Tuple of: (delta_matrix, internal_spin_indices, weight_value)
+                rules.append((tuple(map(tuple, d)), tuple(combo), float(W[combo])))
+        return tuple(rules) # Must be a tuple to be hashable for static_argnames
 
+@dataclass
+class Stamper:
+    L: int
+    spin: int
+    isospin: int
 
-def stamp_two_body(vT1: float, vS1: float, spin: int = 2, isospin: int = 2) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Builds the topological stamp for the 2-Body Contact Interaction.
-    """
-    num_local_states = spin * isospin
-    W = np.full((num_local_states, num_local_states, num_local_states, num_local_states), np.nan, dtype=np.float64)
-    for p in range(4):
-        for q in range(p + 1, 4):
-            tz_p, sz_p = divmod(p, 2)
-            tz_q, sz_q = divmod(q, 2)
-            for r in range(4):
-                for s in range(r + 1, 4):
-                    tz_r, sz_r = divmod(r, 2)
-                    tz_s, sz_s = divmod(s, 2)
+    def stamp(self, vT1, vS1, v3NF=None):
+        stamp_1b = self.stamp_1b()
+        stamp_2b = self.stamp_2b(vT1, vS1)
+        stamp_3b = self.stamp_3b(v3NF) if v3NF else None
 
-                    # Conservation of Total Tz and Sz
-                    if tz_p + tz_q != tz_r + tz_s:
-                        continue
-                    if sz_p + sz_q != sz_r + sz_s:
-                        continue
+        return stamp_1b, stamp_2b, stamp_3b
 
-                    if tz_p == tz_q:
-                        val = vT1
-                    elif sz_p == sz_q:
-                        val = vS1
-                    else:
-                        val = (vS1 + vT1) * 0.5 if (p == r) else (vS1 - vT1) * 0.5
+    def stamp_1b(self) -> Stamp:
+        deltas = []
+        weights = []
+        I4 = np.eye(self.spin * self.isospin, dtype=np.float64)
 
-                    W[p, q, r, s] = val
-                    # W[q, p, r, s] = -val
-                    # W[p, q, s, r] = -val
-                    # W[q, p, s, r] = val
+        # On-site diagonal
+        deltas.append([0, 0, 0])
+        weights.append(6.0 * I4)
 
-    deltas = np.array([[0, 0, 0], [0, 0, 0], [0, 0, 0]], dtype=np.int32)
-    weights = np.array([W], dtype=np.float64)
-    return deltas, weights
+        # Nearest-neighbor hopping (3D)
+        for dim in range(3):
+            for direction in [1, -1]:
+                shift = [0, 0, 0]
+                shift[dim] = direction
+                deltas.append(shift)
+                weights.append(-1.0 * I4)
 
+        deltas = np.array(deltas)
+        weights = np.array(weights)
+        return Stamp(deltas, weights)
 
-def stamp_three_body(v3NF: float, spin: int, isospin: int) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Builds the topological stamp for the 3-Body NNN Contact Interaction.
-    """
-    num_local_states = spin * isospin
+    def stamp_2b(self, vT1: float, vS1: float) -> Stamp:
+        num_local_states = self.spin * self.isospin
+        W = np.full((num_local_states, num_local_states, num_local_states, num_local_states), np.nan, dtype=np.float64)
+        # p > q & r > s
+        for p in range(4):
+            for q in range(p + 1, 4):
+                tz_p, sz_p = divmod(p, 2)
+                tz_q, sz_q = divmod(q, 2)
+                for r in range(4):
+                    for s in range(r + 1, 4):
+                        tz_r, sz_r = divmod(r, 2)
+                        tz_s, sz_s = divmod(s, 2)
 
-    # 1. Initialize with NaN to protect valid 0.0 interactions
-    W = np.full(
-        (num_local_states, num_local_states, num_local_states, 
-         num_local_states, num_local_states, num_local_states), 
-        np.nan, dtype=np.float64
-    )
+                        # Conservation of total Tz and Sz
+                        if tz_p + tz_q != tz_r + tz_s:
+                            continue
+                        if sz_p + sz_q != sz_r + sz_s:
+                            continue
 
-    for p in range(num_local_states):
-        for q in range(p + 1, num_local_states):
-            for r in range(q + 1, num_local_states):
-                W[p, q, r, p, q, r] = v3NF
+                        if tz_p == tz_q:
+                            val = vT1
+                        elif sz_p == sz_q:
+                            val = vS1
+                        else:
+                            val = (vS1 + vT1) * 0.5 if (p == r) else (vS1 - vT1) * 0.5
 
-    deltas = np.array([[[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]], dtype=np.int32)
-    weights = np.array([W], dtype=np.float64)
-    
-    return deltas, weights
+                        W[p, q, r, s] = val
+
+        deltas = np.array([[[0, 0, 0], [0, 0, 0], [0, 0, 0]]], dtype=np.int64)
+        weights = np.array([W], dtype=np.float64)
+        return Stamp(deltas, weights)
+
+    def stamp_3b(self, v3NF: float) -> Stamp:
+        num_local_states = self.spin * self.isospin
+
+        W = np.full(
+            (num_local_states, num_local_states, num_local_states, 
+             num_local_states, num_local_states, num_local_states), 
+            np.nan, dtype=np.float64
+        )
+
+        # p > q > r
+        for p in range(num_local_states):
+            for q in range(p + 1, num_local_states):
+                for r in range(q + 1, num_local_states):
+                    W[p, q, r, p, q, r] = v3NF
+
+        deltas = np.array([[[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]], dtype=np.int64)
+        weights = np.array([W], dtype=np.float64)
+
+        return Stamp(deltas, weights)
 
 def stamp_to_one_body(
     deltas: np.ndarray, weights: np.ndarray, L: int
 ) -> OneBodyOperator:
-    """
-    Converts a 1-body stamp back into the legacy OneBodyOperator format.
-    """
     nstat = (L**3) * 4
     spatial_coords = np.mgrid[0:L, 0:L, 0:L].reshape(3, -1).T
 
@@ -134,9 +165,6 @@ def stamp_to_one_body(
 def stamp_to_two_body(
     deltas: np.ndarray, weights: np.ndarray, L: int, spin: int = 2, isospin: int = 2
 ): # -> TwoBodyOperator 
-    """
-    Converts a 2-body stamp back into the legacy TwoBodyOperator format.
-    """
     num_local_states = spin * isospin
     basis_size = (L**3) * num_local_states
 
@@ -204,10 +232,6 @@ def stamp_to_two_body(
 def stamp_to_three_body(
     deltas: np.ndarray, weights: np.ndarray, L: int, spin: int = 2, isospin: int = 2
 ): # -> ThreeBodyOperator
-    """
-    Converts a 3-body stamp back into the legacy ThreeBodyOperator format.
-    Filters for p < q < r -> p < q < r to match `lattice.NNNcontact`.
-    """
     num_local_states = spin * isospin
     basis_size = (L**3) * num_local_states
     
@@ -277,3 +301,44 @@ def stamp_to_three_body(
     ))
 
     return ThreeBodyOperator(final_indices[sort_idx], final_values[sort_idx], basis_size)
+
+
+# NOTE: this should be only one after jax/numpy mixed usage resolved
+def get_global_indices_jax(L, dof, delta, combo):
+    delta = jnp.atleast_2d(delta)
+    spatial = jnp.mgrid[0:L, 0:L, 0:L].reshape(3, -1).T
+    strides = jnp.array([L**2, L, 1]) * dof
+    
+    indices = [jnp.sum(spatial * strides, axis=1) + combo[0]]
+    for i, d in enumerate(delta):
+        shifted = (spatial + jnp.array(d)) % L
+        indices.append(jnp.sum(shifted * strides, axis=1) + combo[i+1])
+        
+    return jnp.column_stack(indices)
+
+def get_global_indices_np(
+    L: int, num_local_states: int, deltas: np.ndarray, internal_combo: list
+) -> np.ndarray:
+    """
+    Translates local topological shifts into global 1D array indices.
+
+    deltas: (N-1, 3)array of spatial shifts relative to the primary particle.
+    internal_combo: List of length N containing the spin/isospin indices (e.g., [p, q, r, s]).
+    """
+    deltas = np.atleast_2d(deltas)
+    spatial_coords = np.mgrid[0:L, 0:L, 0:L].reshape(3, -1).T
+    strides = np.array([L**2, L, 1]) * num_local_states
+
+    global_idx = []
+
+    # 1. Base particle (Implicit delta = [0, 0, 0])
+    base_idx = np.sum(spatial_coords * strides, axis=1) + internal_combo[0]
+    global_idx.append(base_idx)
+
+    # 2. Shifted particles
+    for i, d in enumerate(deltas):
+        shifted_coords = (spatial_coords + d) % L
+        idx = np.sum(shifted_coords * strides, axis=1) + internal_combo[i + 1]
+        global_idx.append(idx)
+
+    return np.column_stack(global_idx)
