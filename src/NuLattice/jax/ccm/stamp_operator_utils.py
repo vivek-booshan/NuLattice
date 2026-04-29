@@ -1,13 +1,11 @@
 import jax.numpy as jnp
 import numpy as np
 
-from NuLattice.jax import lattice as lat
-from NuLattice.utils._jax_types import TwoBodyOperator, ThreeBodyOperator
+from NuLattice.utils._jax_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
 
 from . import three_body_utils as tbu
-from .stamps import get_global_indices_np as get_global_indices
 
-# duplicated just to keep imports to tbu
+# duplicated cuz lazy
 def get_ref_energy(no_1b_hh, no_2b_hhhh, w_hhh_hhh=None):
     en = 0.0
     hnum = len(no_1b_hh)
@@ -24,104 +22,23 @@ def get_ref_energy(no_1b_hh, no_2b_hhhh, w_hhh_hhh=None):
         en += tbu.get_3NF_Eref(w_hhh_hhh)
     return float(en)
 
-def evaluate_stamp_Eref(
-    L: int, num_local_states: int, mask_H: np.ndarray, stamp_1b, stamp_2b, stamp_3b=None
-) -> float:
-    """
-    Computes the vacuum reference energy directly from topological stamps.
-    E_ref = <T> + <V> + <W> 
-    """
-    e_ref = 0.0
-
-    for d, W in zip(*stamp_1b):
-        # A global diagonal element MUST have no spatial shift
-        if not np.allclose(d, 0): 
-            continue 
-            
-        nz = np.where(W != 0)
-        for a, b in zip(*nz):
-            if a != b:
-                continue  # Trace requires internal diagonal too
-                
-            idx = get_global_indices(L, num_local_states, d, [a, b])
-            # Only need to check one mask since a=b and d=0 implies idx[:,0] == idx[:,1]
-            e_ref += W[a, a] * np.sum(mask_H[idx[:, 0]])
-
-    for d, W in zip(*stamp_2b):
-        if not np.allclose(d, 0): 
-            continue
-            
-        nz = np.where(~np.isnan(W))
-        for p, q, r, s in zip(*nz):
-            # Trace requires p->p and q->q
-            if p != r or q != s:
-                continue
-                
-            idx = get_global_indices(L, num_local_states, d, [p, q, p, q])
-            overlap = mask_H[idx[:, 0]] * mask_H[idx[:, 1]]
-            
-            # Bare expectation <V>: 1/2 sum_ij V_ijij. 
-            # Since V_ijij + V_jiji = 2*W, this resolves exactly to +1.0 * W
-            e_ref += 1.0 * W[p, q, p, q] * np.sum(overlap)
-
-    if stamp_3b is not None:
-        for d, W in zip(*stamp_3b):
-            if not np.allclose(d, 0): 
-                continue
-                
-            nz = np.where(~np.isnan(W))
-            for p, q, r, s, t, u in zip(*nz):
-                if p != s or q != t or r != u:
-                    continue
-                    
-                idx = get_global_indices(L, num_local_states, d, [p, q, r, p, q, r])
-                overlap = mask_H[idx[:, 0]] * mask_H[idx[:, 1]] * mask_H[idx[:, 2]]
-                
-                # Bare expectation <W>: 1/6 sum_ijk W_ijkijk. 
-                # The 3! permutations cancel the 1/6 factor to exactly +1.0 * W
-                e_ref += 1.0 * W[p, q, r, p, q, r] * np.sum(overlap)
-
-    return float(e_ref)
-
-def normal_order_masks(
-    L: int, ref_state: list, stamp_1b, stamp_2b, stamp_3b=None, spin=2, isospin=2
-):
-    num_local_states = spin * isospin
-    nstat = (L**3) * num_local_states
-
-    hole_idx, _ = lat.states2PHSpace(ref_state, L)
-    hole_idx = np.array(hole_idx)
-
-    mask_H = np.zeros(nstat, dtype=np.float64)
-    if len(hole_idx) > 0:
-        mask_H[hole_idx] = 1.0
-
-    mask_P = 1.0 - mask_H
-
-    vacEn = evaluate_stamp_Eref(
-        L, num_local_states, mask_H, stamp_1b, stamp_2b, stamp_3b
-    )
-
-    return jnp.array(mask_P), jnp.array(mask_H), vacEn
-
-
-def stamp_to_legacy_wrapper(
-    L: int,
-    ref_state_holes: list,
-    stamp_1b,
-    stamp_2b,
-    stamp_3b=None,
+def normal_order_tensors_from_stamper(
+    stamper,
+    ref_state: list,
     NO2B=True,
-    spin=2,
-    isospin=2,
     dtype=np.float64,
 ):
+    L = stamper.L
+    spin, isospin = stamper.spin, stamper.isospin
+    stamp_1b, stamp_2b, stamp_3b = stamper.one_body, stamper.two_body, stamper.three_body
     num_local_states = spin * isospin
     nstat = (L**3) * num_local_states
 
-    mask_P_jnp, mask_H_jnp, vacEn_pure = normal_order_masks(
-        L, ref_state_holes, stamp_1b, stamp_2b, stamp_3b, spin, isospin
-    )
+    if stamper.pmask is None or stamper.hmask is None:
+        stamper.normal_order_masks(ref_state)
+    mask_P_jnp, mask_H_jnp = stamper.pmask, stamper.hmask
+
+    vacEn_pure = stamper.get_reference_energy()
 
     # NOTE: need to clean up jax/numpy usage
     mask_P, mask_H = np.array(mask_P_jnp), np.array(mask_H_jnp)
@@ -137,7 +54,7 @@ def stamp_to_legacy_wrapper(
     for d, W in zip(*stamp_1b):
         nz = np.where(W != 0)
         for a, b in zip(*nz):
-            idx = get_global_indices(L, num_local_states, d, [a, b])
+            idx = stamper.get_global_indices(d, [a, b])
             np.add.at(H_dense, (idx[:, 0], idx[:, 1]), W[a, b])
 
     f_pp = H_dense[np.ix_(part_idx, part_idx)]
@@ -154,7 +71,7 @@ def stamp_to_legacy_wrapper(
         nz = np.where(~np.isnan(W))
         for p, q, r, s in zip(*nz):
             val = W[p, q, r, s]
-            idx = get_global_indices(L, num_local_states, d, [p, q, r, s])
+            idx = stamper.get_global_indices(d, [p, q, r, s])
 
             # Binary scoring based on particle/hole status
             P = mask_P[idx].astype(np.int64)
@@ -228,8 +145,8 @@ def stamp_to_legacy_wrapper(
     f_hh += np.einsum("aibi->ab", v_hhhh)
 
     if stamp_3b is not None:
-        from NuLattice.jax.ccm.stamps import stamp_to_three_body
-        op3 = stamp_to_three_body(stamp_3b[0], stamp_3b[1], L, spin, isospin)
+        from NuLattice.jax.ccm.stamp_operator_utils import stamp_to_operator
+        op3 = stamp_to_operator(stamp_3b.deltas, stamp_3b.weights, L, spin, isospin)
 
         w_res = tbu.get_3NF(part_idx, hole_idx, op3)
         dum_fock = tbu.get_3NF_fock(hnum, pnum, w_res[6], w_res[7], w_res[8])
@@ -275,3 +192,66 @@ def stamp_to_legacy_wrapper(
 
     NO2B_stuff = vacEn, fock, two_body
     return NO2B_stuff if (NO2B or stamp_3b is None) else (NO2B_stuff, w_res)
+
+def stamp_to_operator(
+    deltas: np.ndarray, 
+    weights: np.ndarray, 
+    L: int, 
+    spin: int = 2, 
+    isospin: int = 2
+):
+    """
+    Generic converter that transforms topological stamps into sparse Operator objects.
+    Automatically detects 1-body, 2-body, or 3-body interactions by tensor rank.
+    """
+    num_local_states = spin * isospin
+    basis_size = (L**3) * num_local_states
+    n_sites = L**3
+
+    n_legs = weights.ndim - 1
+    n_body = n_legs // 2
+    
+    spatial_coords = np.mgrid[0:L, 0:L, 0:L].reshape(3, -1).T
+    strides = np.array([L**2, L, 1]) * num_local_states
+
+    all_indices = []
+    all_values = []
+
+    for delta_matrix, W in zip(deltas, weights):
+        d_matrix = np.atleast_2d(delta_matrix)
+        
+        full_deltas = np.vstack([np.zeros((1, 3), dtype=int), d_matrix])
+        
+        shifted_sites = (spatial_coords[:, np.newaxis, :] + full_deltas) % L
+        bases = np.sum(shifted_sites * strides, axis=2)
+        
+        valid_mask = (W != 0) & (~np.isnan(W))
+        internal_combos = np.array(np.where(valid_mask)).T # Shape: (N_nonzero, n_legs)
+        
+        for combo in internal_combos:
+            val = W[tuple(combo)]
+            
+            global_indices = bases + combo
+            
+            all_indices.append(global_indices)
+            all_values.append(np.full(n_sites, val))
+
+
+    final_indices = np.vstack(all_indices)
+    final_values = np.concatenate(all_values)
+
+    sort_keys = tuple(final_indices[:, i] for i in range(n_legs - 1, -1, -1))
+    sort_idx = np.lexsort(sort_keys)
+
+    operator_kwargs = {
+        "indices": final_indices[sort_idx],
+        "values": final_values[sort_idx],
+        "nstat": basis_size
+    }
+
+    if n_body == 1:
+        return OneBodyOperator(**operator_kwargs)
+    elif n_body == 2:
+        return TwoBodyOperator(**operator_kwargs)
+    else:
+        return ThreeBodyOperator(**operator_kwargs)
