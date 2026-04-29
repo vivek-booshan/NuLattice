@@ -2,156 +2,211 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
-from .stamps import get_global_indices_jax
-
-def apply_spatial_shift(tensor: jax.Array, delta: jax.Array, L: int, dof: int = 4, axis: int = 0) -> jax.Array:
-
-    is_zero_shift = jnp.all(delta == 0)
-    
-    def do_shift(t):
-        # All shape/axis logic here uses concrete integers now
-        t_moved = jnp.moveaxis(t, axis, 0)
-        
-        # Unflatten to 3D Grid
-        shape_moved = t_moved.shape
-        grid_shape = (L, L, L, dof) + shape_moved[1:]
-        grid_tensor = jnp.reshape(t_moved, grid_shape)
-        
-        # Periodic Boundary Shifts
-        shifted_grid = grid_tensor
-        for i in range(3):
-            shifted_grid = jax.lax.cond(
-                delta[i] != 0,
-                lambda g, d_val, ax_idx: jnp.roll(g, shift=d_val, axis=ax_idx),
-                lambda g, d_val, ax_idx: g,
-                shifted_grid, delta[i], i
-            )
-            
-        shifted_flat = jnp.reshape(shifted_grid, shape_moved)
-        return jnp.moveaxis(shifted_flat, 0, axis)
-    
-    return jax.lax.cond(is_zero_shift, lambda t: t, do_shift, tensor)
-
-def parse_stamp_to_rules(stamp):
-    """
-    Converts dense stamp matrices into a static list of valid scattering rules.
-    This prevents JAX from trying to compile dynamic NaN-filtering logic.
-    """
-    deltas, weights = stamp
-    rules = []
-    for d, W in zip(deltas, weights):
-        nz = np.where(~np.isnan(W))
-        for combo in zip(*nz):
-            # Tuple of: (delta_matrix, internal_spin_indices, weight_value)
-            rules.append((tuple(map(tuple, d)), tuple(combo), float(W[combo])))
-    return tuple(rules) # Must be a tuple to be hashable for static_argnames
-
-@partial(jax.jit, static_argnames=("t_str", "v_str", "out_str", "stamp_rules", "L", "dof"))
+@partial(jax.jit, static_argnames=("subscripts", "L", "dof", "factor"))
 def stamp_einsum(
-    t_str: str, 
-    v_str: str, 
-    out_str: str, 
-    tensor: jax.Array, 
-    out_tensor: jax.Array, 
-    stamp_rules: tuple, 
-    is_p: jax.Array, 
-    local_map: jax.Array, 
-    L: int, 
+    subscripts: str,
+    tensor: jax.Array,
+    out_tensor: jax.Array,
+    deltas: jax.Array,
+    weights: jax.Array,
+    is_p: jax.Array,
+    local_map: jax.Array,
+    L: int,
     dof: int = 4,
-    factor: float = 1.0
+    factor: float = 1.0,
 ) -> jax.Array:
-    """
-    Subspace-aware Matrix-Free Contraction.
-    """
-    # CC Conventions determine the masks dynamically
-    req_p = [c in "abcd" for c in v_str]
-    free_idx = [c for c in out_str if c not in v_str]
-    has_free = len(free_idx) > 0
-    if has_free:
-        free_pos = out_str.index(free_idx[0])
 
-    # Unroll the static rules entirely at compile-time
-    for d, combo, val in stamp_rules:
-        idx = get_global_indices_jax(L, dof, d, combo)
-        
-        # Enforce Topography (Masking)
-        mask = jnp.ones(L**3, dtype=bool)
-        for i in range(len(v_str)):
-            mask &= is_p[idx[:, i]] if req_p[i] else ~is_p[idx[:, i]]
-            
-        # Map Global to P/H Subspace
-        loc = {c: jnp.where(mask, local_map[idx[:, i]], 0) for i, c in enumerate(v_str)}
-        
-        # Gather T
-        t_idx = tuple(loc[c] if c in loc else slice(None) for c in t_str)
-        t_val = tensor[t_idx] 
-        
-        # Compute Algebraic Update
-        update = (val * factor) * (mask[:, None] if has_free else mask) * t_val
-        
-        # Scatter to Output
-        if not has_free:
-            # 0D update: scatter point-to-point
-            out_tensor = out_tensor.at[loc[out_str[0]], loc[out_str[1]]].add(update)
-        else:
-            # 1D update: scatter array slices
-            bound_char = out_str[1] if free_pos == 0 else out_str[0]
-            if free_pos == 0:
-                out_tensor = out_tensor.at[:, loc[bound_char]].add(update.T)
+    lhs, out_str = subscripts.split("->")
+    t_str, v_str = lhs.split(",")
+    t_str, v_str, out_str = t_str.strip(), v_str.strip(), out_str.strip()
+
+    req_p = {c: True for c in v_str if c in "abcd"}
+    req_p.update({c: False for c in v_str if c in "ijkl"})
+
+    t_adv = [c for c in t_str if c in v_str]
+    out_adv = [c for c in out_str if c in v_str]
+
+    def get_layout(string, adv_chars):
+        if not adv_chars:
+            return "Q" + string
+        adv_ordered = [c for c in string if c in adv_chars]
+        free_ordered = [c for c in string if c not in adv_chars]
+        adv_idx = sorted([string.index(c) for c in adv_chars])
+
+        if adv_idx == list(range(min(adv_idx), max(adv_idx) + 1)):
+            return (
+                "".join(free_ordered[: min(adv_idx)])
+                + "Q"
+                + "".join(adv_ordered)
+                + "".join(free_ordered[min(adv_idx) :])
+            )
+        return "Q" + "".join(adv_ordered) + "".join(free_ordered)
+
+    t_layout = get_layout(t_str, t_adv)
+    out_layout = get_layout(out_str, out_adv)
+
+    v_perms = [(v_str, 1.0)]
+    if req_p[v_str[0]] == req_p[v_str[1]]:
+        v_perms.append((v_str[1] + v_str[0] + v_str[2:], -1.0))
+    if req_p[v_str[2]] == req_p[v_str[3]]:
+        new_perms = [(s[:2] + s[3] + s[2], -f) for s, f in v_perms]
+        v_perms.extend(new_perms)
+
+    # Pre-compute spatial grid and reshapes ONCE outside the loop
+    base_spatial = jnp.mgrid[0:L, 0:L, 0:L].reshape(3, -1).T
+    strides = jnp.array([L**2, L, 1], dtype=jnp.int32)
+    local_map_reshaped = local_map.reshape(L**3, dof)
+    is_p_reshaped = is_p.reshape(L**3, dof)
+
+    def scan_step(current_out, carry_in):
+        d, W = carry_in
+        W = jnp.nan_to_num(W)
+
+        full_d = jnp.vstack([jnp.zeros((1, 3), dtype=jnp.int32), d])
+
+        maps, masks = {}, {}
+        for i, char in enumerate(v_str):
+            if char in t_adv or char in out_adv:
+                shift_vec = full_d[i]
+                shifted = (base_spatial + shift_vec) % L
+                shift_idx = jnp.sum(shifted * strides, axis=1)
+
+                maps[char] = local_map_reshaped[shift_idx]
+                raw_mask = is_p_reshaped[shift_idx]
+                masks[char] = raw_mask if req_p[char] else ~raw_mask
+
+        # gather
+        t_idx = []
+        for char in t_str:
+            if char in t_adv:
+                shape = [L**3] + [1] * len(t_adv)
+                shape[t_adv.index(char) + 1] = dof
+                t_idx.append(maps[char].reshape(shape))
             else:
-                out_tensor = out_tensor.at[loc[bound_char], :].add(update)
-                
-    return out_tensor
+                t_idx.append(slice(None))
 
-@partial(jax.jit, static_argnames=("L", "stamp_rules"))
+        t_val = (
+            tensor[tuple(t_idx)]
+            if t_adv
+            else jnp.broadcast_to(tensor, (L**3,) + tensor.shape)
+        )
+
+        valid_t = jnp.ones((L**3,) + (1,) * len(t_adv), dtype=bool)
+        for char in t_adv:
+            shape = [L**3] + [1] * len(t_adv)
+            shape[t_adv.index(char) + 1] = dof
+            valid_t &= masks[char].reshape(shape)
+
+        valid_t_shape = [1] * len(t_layout)
+        valid_t_shape[t_layout.index("Q")] = L**3
+        for char in t_adv:
+            valid_t_shape[t_layout.index(char)] = dof
+        t_val = jnp.where(valid_t.reshape(valid_t_shape), t_val, 0.0)
+
+        # einsum logic
+        valid_out = jnp.ones((L**3,) + (1,) * len(out_adv), dtype=bool)
+        for char in out_adv:
+            shape = [L**3] + [1] * len(out_adv)
+            shape[out_adv.index(char) + 1] = dof
+            valid_out &= masks[char].reshape(shape)
+
+        valid_out_shape = [1] * len(out_layout)
+        valid_out_shape[out_layout.index("Q")] = L**3
+        for char in out_adv:
+            valid_out_shape[out_layout.index(char)] = dof
+
+        w_dim_str = v_str if W.ndim == 4 else "Q" + v_str
+
+        accum = 0
+        for perm_v_str, sign in v_perms:
+            ein_str = (
+                f"{t_layout}, {w_dim_str.replace(v_str, perm_v_str)} -> {out_layout}"
+            )
+            accum += jnp.einsum(ein_str, t_val, W) * (sign * factor)
+
+        accum = jnp.where(valid_out.reshape(valid_out_shape), accum, 0.0)
+
+        # scatter
+        out_idx = []
+        for char in out_str:
+            if char in out_adv:
+                shape = [L**3] + [1] * len(out_adv)
+                shape[out_adv.index(char) + 1] = dof
+                out_idx.append(maps[char].reshape(shape))
+            else:
+                out_idx.append(slice(None))
+
+        if out_adv:
+            updated_out = current_out.at[tuple(out_idx)].add(accum)
+        else:
+            updated_out = current_out + jnp.sum(accum)
+
+        return updated_out, None
+
+    final_out_tensor, _ = jax.lax.scan(scan_step, out_tensor, (deltas, weights))
+
+    return final_out_tensor
+
+
+@partial(jax.jit, static_argnames=("L"))
 def stamp_t1(
-    t1: jax.Array, 
-    t2: jax.Array, 
-    f_ph: jax.Array, 
-    f_pp: jax.Array, 
-    f_hh: jax.Array, 
-    stamp_rules: tuple, 
-    is_p: jax.Array, 
-    local_map: jax.Array, 
-    L: int
+    t1: jax.Array,
+    t2: jax.Array,
+    f_ph: jax.Array,
+    f_pp: jax.Array,
+    f_hh: jax.Array,
+    deltas,
+    weights,
+    is_p: jax.Array,
+    local_map: jax.Array,
+    L: int,
 ) -> jax.Array:
-    
-    # We define the shapes dynamically from the dense fock mats
+
     P, H = f_ph.shape
-    
-    # --- H1 Residuals ---
+
+    def _einsum(contraction, in_tensor, out_tensor, factor=1.0):
+        return stamp_einsum(
+            contraction,
+            in_tensor,
+            out_tensor,
+            deltas,
+            weights,
+            is_p,
+            local_map,
+            L,
+            factor=factor,
+        )
+
     H1 = f_ph
-    H1 = stamp_einsum("ck", "akci", "ai", t1, H1, stamp_rules, is_p, local_map, L, factor=-1.0)
+    H1 = _einsum("ck, akci -> ai", t1, H1, factor=-1.0)
     H1 += jnp.einsum("ck, acik -> ai", f_ph, t2)
-    H1 = stamp_einsum("cakl", "cikl", "ai", t2, H1, stamp_rules, is_p, local_map, L, factor=-0.5)
+    H1 = _einsum("cakl, cikl -> ai", t2, H1, factor=-0.5)
 
-    I_dl = stamp_einsum("ck", "cdkl", "dl", t1, jnp.zeros((P, H)), stamp_rules, is_p, local_map, L)
+    I_dl = _einsum("ck, cdkl -> dl", t1, jnp.zeros((P, H)))
     H1 += jnp.einsum("dl, dali -> ai", I_dl, t2)
-    
-    H1 = stamp_einsum("cdki", "cdak", "ai", t2, H1, stamp_rules, is_p, local_map, L, factor=-0.5)
 
-    # --- X_hh Intermediates ---
+    # ppph
+    H1 = _einsum("cdki, cdak -> ai", t2, H1, factor=-0.5)
+
     X_hh = -f_hh
     X_hh -= 0.5 * jnp.einsum("ck, ci -> ki", f_ph, t1)
-    X_hh = stamp_einsum("bj", "bijk", "ki", t1, X_hh, stamp_rules, is_p, local_map, L, factor=-1.0)
-    X_hh = stamp_einsum("cdli", "cdlk", "ki", t2, X_hh, stamp_rules, is_p, local_map, L, factor=-1.0)
+    X_hh = _einsum("bj, bijk -> ki", t1, X_hh, factor=-1.0)
+    X_hh = _einsum("cdli, cdlk -> ki", t2, X_hh, factor=-1.0)
 
-    I_dk = stamp_einsum("cl", "cdlk", "dk", t1, jnp.zeros((P, H)), stamp_rules, is_p, local_map, L)
+    I_dk = _einsum("cl, cdlk -> dk", t1, jnp.zeros((P, H)))
     X_hh -= 0.5 * jnp.einsum("dk, di -> ki", I_dk, t1)
 
-    # --- X_pp Intermediates ---
     X_pp = f_pp
     X_pp -= 0.5 * jnp.einsum("ck, ak -> ac", f_ph, t1)
-    X_pp = stamp_einsum("dakl", "dckl", "ac", t2, X_pp, stamp_rules, is_p, local_map, L, factor=-0.5)
+    X_pp = _einsum("dakl, dckl -> ac", t2, X_pp, factor=-0.5)
 
-    I_cl = stamp_einsum("dk", "cdkl", "cl", t1, jnp.zeros((P, H)), stamp_rules, is_p, local_map, L)
+    I_cl = _einsum("dk, cdkl -> cl", t1, jnp.zeros((P, H)))
     X_pp += 0.5 * jnp.einsum("cl, al -> ac", I_cl, t1)
 
-    X_pp = stamp_einsum("ck", "cdak", "ad", t1, X_pp, stamp_rules, is_p, local_map, L, factor=-1.0)
+    # ppph
+    X_pp = _einsum("ck, cdak -> ad", t1, X_pp, factor=-1.0)
 
-    # --- Finalize ---
     H1 += jnp.einsum("ac, ci -> ai", X_pp, t1)
     H1 += jnp.einsum("ki, ak -> ai", X_hh, t1)
 
