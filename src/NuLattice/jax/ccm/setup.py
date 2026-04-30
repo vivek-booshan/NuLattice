@@ -277,22 +277,3 @@ def get_norm_ord_int(
 
     return vacEn, fock_mats, raw_2b
 
-def get_sector_masks(part: np.ndarray, hole: np.ndarray, L: int, spin: int = 2, isospin: int = 2):
-    """
-    Generates 1D binary projection masks for the Particle and Hole spaces.
-    These are used to dynamically filter the universal stamp interactions.
-    """
-    nstat = (L**3) * spin * isospin
-    
-    # 1. Hole Mask (1.0 if the state is occupied, 0.0 otherwise)
-    mask_H_np = np.zeros(nstat, dtype=np.float64)
-    if len(hole) > 0:
-        mask_H_np[hole] = 1.0
-        
-    # 2. Particle Mask (1.0 if the state is unoccupied, 0.0 otherwise)
-    mask_P_np = np.zeros(nstat, dtype=np.float64)
-    if len(part) > 0:
-        mask_P_np[part] = 1.0
-        
-    # Convert to immutable JAX arrays for the GPU solver
-    return jnp.array(mask_P_np), jnp.array(mask_H_np)
