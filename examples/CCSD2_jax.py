@@ -3,7 +3,8 @@ import argparse
 import NuLattice.jax.lattice as lat
 import NuLattice.utils.references as ref
 import NuLattice.jax.ccm as ccm
-from NuLattice.jax.ccm import stamps, stamp_operator_utils as sou
+from NuLattice.jax.ccm import stamps
+from NuLattice.jax.ccm.stamps import utils as stamp_utils
 from NuLattice.utils._jax_types import Chef
 
 
@@ -116,7 +117,7 @@ def main():
     mask_p, mask_h = stamper.normal_order_masks(ref_state)
     energy = stamper.get_reference_energy()
 
-    refEn, fock_mats, two_body_int = sou.normal_order_tensors_from_stamper(
+    refEn, fock_mats, two_body_int = stamp_utils.normal_order_tensors_from_stamper(
         stamper,
         ref_state,
         NO2B=True,

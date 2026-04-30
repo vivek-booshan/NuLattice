@@ -9,7 +9,7 @@ from jax.sharding import PartitionSpec as P, NamedSharding
 from NuLattice.utils._jax_types import Chef
 
 from .amplitudes import t1Iter, t2Iter
-from .stamplitudes import stamp_t1 
+from .stamps.amplitudes import stamp_t1 
 
 @jax.jit
 def ccsd_energy(f_ph, v_pphh, t2, t1):

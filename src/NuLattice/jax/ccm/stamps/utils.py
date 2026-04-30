@@ -3,7 +3,7 @@ import numpy as np
 
 from NuLattice.utils._jax_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
 
-from . import three_body_utils as tbu
+from .. import three_body_utils as tbu
 
 # duplicated cuz lazy
 def get_ref_energy(no_1b_hh, no_2b_hhhh, w_hhh_hhh=None):
@@ -145,7 +145,6 @@ def normal_order_tensors_from_stamper(
     f_hh += np.einsum("aibi->ab", v_hhhh)
 
     if stamp_3b is not None:
-        from NuLattice.jax.ccm.stamp_operator_utils import stamp_to_operator
         op3 = stamp_to_operator(stamp_3b.deltas, stamp_3b.weights, L, spin, isospin)
 
         w_res = tbu.get_3NF(part_idx, hole_idx, op3)

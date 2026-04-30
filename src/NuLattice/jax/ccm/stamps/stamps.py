@@ -63,6 +63,7 @@ class Stamp:
                 rules.append((tuple(map(tuple, d)), tuple(combo), float(W[combo])))
         return tuple(rules) # Must be a tuple to be hashable for static_argnames
 
+# NOTE: getting monolithic
 class Stamper:
     def __init__(self, L: int, spin: int, isospin: int):
         self.L = L
