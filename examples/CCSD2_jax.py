@@ -1,9 +1,9 @@
 import argparse
 
 import NuLattice.jax.lattice as lat
-import NuLattice.utils.references as ref
 import NuLattice.jax.ccm as ccm
 from NuLattice.utils._jax_types import Chef
+from NuLattice.utils.constants import ReferenceState
 
 def main():
     parser = argparse.ArgumentParser(description="Run a NuLattice CCM calculation with custom parameters.")
@@ -52,21 +52,23 @@ def main():
         # chef = Chef(total_processes, local_devices)
 
     phys_unit = lat.phys_unit(args.a_lat)
-    my_basis = lat.get_sp_basis(args.L)
     lattice = lat.get_lattice(args.L)
     
     print(f"Lattice: {args.L}^3 | Spacing: {args.a_lat} fm")
-    print(f"Number of single-particle states = {len(my_basis)}")
-    print(f"Number of lattice sites = {len(lattice)}")
 
     myTkin = lat.Tkin(lattice, args.L)
     mycontact = lat.contacts(args.vT1, args.vS1, lattice, args.L)
     my3body = lat.NNNcontact(args.cE, lattice, args.L)
 
-    print(f"Matrix elements - Tkin: {len(myTkin)}, 2-body: {len(mycontact)}, 3-body: {len(my3body)}")
-
     # reference state
-    ref_state = ref.ref_16O_gs
+    ref_state = ReferenceState.O16_GS
+
+    states = (args.L**3) * 4
+    n_occ = len(ref_state)
+    n_virt = states - n_occ
+    print(f"States: {states} (particles: {n_virt} | holes: {n_occ})")
+    print(f"Number of lattice sites = {len(lattice)}")
+    print(f"Matrix elements - 1-body: {len(myTkin)}, 2-body: {len(mycontact)}, 3-body: {len(my3body)}")
 
 
     refEn, fock_mats, two_body_int = ccm.get_norm_ordered_ham(
