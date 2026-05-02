@@ -9,14 +9,13 @@ MASS  = 0.5*(MASS_P+MASS_N)
 
 
 
-# NOTE(vivek): double check reference generation with Matthias/Thomas
 def generate_reference(coords):
     """Generates 4 states (all spin/isospin combos) for each (x, y, z) coordinate."""
     reference = []
     for x, y, z in coords:
-        for tz in [0, 1]:
-            for sz in [0, 1]:
-                reference.append([x, y, z, sz, tz]) # currently sz, tz but should be tz, sz
+        for sz in [0, 1]:
+            for tz in [0, 1]:
+                reference.append([x, y, z, tz, sz])
     return reference
 
 class ReferenceState:
@@ -37,6 +36,9 @@ class ReferenceState:
 
     O16_GS = generate_reference([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)])
     O16_EX = generate_reference([(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)])
+
+    NE20_GS = generate_reference([(0, 0, 0), (0, 0, 1), (0, 0, 2), (1, 0, 1), (0, 1, 1)])
+    SI28_GS = generate_reference([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1)])
 
     @staticmethod
     def holes(ref, basis):
