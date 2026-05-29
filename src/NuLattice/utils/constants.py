@@ -9,36 +9,65 @@ MASS  = 0.5*(MASS_P+MASS_N)
 
 
 
-def generate_reference(coords):
+def generate_alpha(coords):
     """Generates 4 states (all spin/isospin combos) for each (x, y, z) coordinate."""
     reference = []
     for x, y, z in coords:
-        for sz in [0, 1]:
-            for tz in [0, 1]:
-                reference.append([x, y, z, tz, sz])
+        for tz in [0, 1]:
+            for sz in [0, 1]:
+                reference.append([x, y, z, sz, tz])
+    return reference
+
+def generate_deuteron(coords):
+    reference = []
+    for coord in coords:
+        reference.append([*coord, 0, 0])
+        reference.append([*coord, 1, 0])
+    return reference
+
+def generate_triton(coords):
+    reference = []
+    for coord in coords:
+        reference.append([*coord, 0, 0])
+        reference.append([*coord, 1, 0])
+        reference.append([*coord, 1, 1])
+    return reference
+
+def generate_helion(coords):
+    reference = []
+    for coord in coords:
+        reference.append([*coord, 0, 0])
+        reference.append([*coord, 1, 0])
+        reference.append([*coord, 0, 1])
     return reference
 
 class ReferenceState:
-    H2_GS  = [[0,0,0,0,0], [0,0,0,1,0]]
-    H3_GS  = [[0,0,0,0,0], [0,0,0,1,0], [0,0,0,1,1]]
-    HE3_GS = [[0,0,0,0,0], [0,0,0,1,0], [0,0,0,0,1]]
-    HE4_GS = generate_reference([(0, 0, 0)])
+    # [x, y, z, spin, isospin]
 
-    LI6_GS     = [[0,0,0,0,0], [0,0,0,1,0], [0,0,0,0,1], [0,0,0,1,1], [1,0,0,0,0], [1,0,0,1,0]]
-    LI6_3HE3H  = [[0,0,0,0,0], [0,0,0,1,0], [0,0,0,1,1], [1,0,0,0,0], [1,0,0,1,0], [1,0,0,0,1]]
+    H2_GS = generate_deuteron([(0, 0, 0)])
+    H3_GS = generate_triton([(0, 0, 0)])
+    HE3_GS = generate_helion([(0, 0, 0)])
+    HE4_GS = generate_alpha([(0, 0, 0)])
 
-    BE8_GS  = generate_reference([(0, 0, 0), (1, 0, 0)])
-    C12_GS  = generate_reference([(0, 0, 0), (1, 0, 0), (0, 1, 0)])
+    LI6_GS = generate_alpha([(0, 0, 0)]) + generate_deuteron([(1, 0, 0)])
+    LI6_3HE3H = generate_triton([(0, 0, 0)]) + generate_helion([(1, 0, 0)])
+
+    BE8_GS  = generate_alpha([(0, 0, 0), (1, 0, 0)])
+    C12_GS  = generate_alpha([(0, 0, 0), (1, 0, 0), (0, 1, 0)])
     
-    C12_HOYLE  = generate_reference([(0, 0, 0), (1, 0, 0), (2, 1, 0)])
-    C12_LINEAR = generate_reference([(0, 0, 0), (1, 0, 0), (2, 0, 0)])
-    C12_LOOSE  = generate_reference([(0, 0, 0), (2, 1, 2), (1, 2, 1)])
+    C12_HOYLE  = generate_alpha([(0, 0, 0), (1, 0, 0), (2, 1, 0)])
+    C12_LINEAR = generate_alpha([(0, 0, 0), (1, 0, 0), (2, 0, 0)])
+    C12_LOOSE  = generate_alpha([(0, 0, 0), (2, 1, 2), (1, 2, 1)])
 
-    O16_GS = generate_reference([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)])
-    O16_EX = generate_reference([(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)])
+    O16_GS = generate_alpha([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)])
+    O16_EX = generate_alpha([(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)])
 
-    NE20_GS = generate_reference([(0, 0, 0), (0, 0, 1), (0, 0, 2), (1, 0, 1), (0, 1, 1)])
-    SI28_GS = generate_reference([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1)])
+    NE20_GS = generate_alpha([(0, 0, 0), (0, 0, 1), (0, 0, 2), (1, 0, 1), (0, 1, 1)])
+    MG24_GS = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1)])
+    SI28_GS = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1)])
+    S32_GS  = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1), (0, 1, 0)])
+    AR36_GS = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1), (0, 1, 0), (2, 1, 0)])
+    CA40_GS = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1), (2, 0, 1), (2, 1, 2), (2, 0, 2)])
 
     @staticmethod
     def holes(ref, basis):
