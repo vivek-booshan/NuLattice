@@ -10,7 +10,7 @@ __date__ = "2025-07-26"
 
 from .constants import HBARC, MASS
 
-from ._types import (
+from .utils._types import (
     LatticeState,
     SingleParticleBasis,
     LatticeSite,
