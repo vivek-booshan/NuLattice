@@ -8,6 +8,7 @@ from NuLattice.utils.constants import ReferenceState
 def main():
     parser = argparse.ArgumentParser(description="Run a NuLattice CCM calculation with custom parameters.")
 
+    parser.add_argument("--reference", type=str, default="O16",  help="Reference state (HE4, ...)")
     parser.add_argument("--L", type=int, default=4, help="Lattice size L (L*L*L)")
     parser.add_argument("--a_lat", type=float, default=2.0, help="Lattice spacing in fm")
 
@@ -61,7 +62,7 @@ def main():
     my3body = lat.NNNcontact(args.cE, lattice, args.L)
 
     # reference state
-    ref_state = ReferenceState.O16_GS
+    ref_state = getattr(ReferenceState, f"{args.reference.upper()}_GS")
 
     states = (args.L**3) * 4
     n_occ = len(ref_state)
