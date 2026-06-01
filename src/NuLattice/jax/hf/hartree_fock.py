@@ -1,7 +1,80 @@
+from functools import partial
 from typing import Tuple
+
 import jax
 import jax.numpy as jnp
-from functools import partial
+
+from NuLattice.utils._jax_types import Chef
+
+@jax.jit
+def _local_orthonormalize(V):
+    # Compute the small overlap matrix (2k x 2k). 
+    S = jnp.dot(V.T, V)  # calls (cheap) AllReduce on mesh
+    S += 1e-11 * jnp.eye(S.shape[0], dtype=S.dtype)
+    L = jnp.linalg.cholesky(S)
+    L_inv = jnp.linalg.inv(L)
+    return jnp.dot(V, L_inv.T)
+
+@partial(jax.jit, static_argnames=("npart", ))
+def davidson_eigh(H, npart, guess_vecs, max_iter=10):
+    """
+    Finds the lowest `npart` eigenvalues/eigenvectors of a sharded dense Hamiltonian H.
+    
+    Args:
+        H: Sharded Hamiltonian matrix of shape (nstat, nstat)
+        npart: Number of occupied states (lowest roots needed)
+        guess_vecs: Initial guess vectors of shape (nstat, npart) from previous SCF step
+        max_iter: Number of subspace expansion steps (try 3-5 for warm starts)
+
+    Frankensteined from https://joshuagoings.com/2013/08/23/davidsons-method/
+    """
+    nstat = H.shape[0]
+    D = jnp.diag(H) # Extract diagonal for the preconditioner
+    
+    # Initialize a static subspace V of size (nstat, 2 * npart)
+    V = jnp.zeros((nstat, 2 * npart), dtype=H.dtype)
+    V = V.at[:, :npart].set(guess_vecs)
+    V = _local_orthonormalize(V)
+    
+    def body_fun(i, state):
+        V_sub, _ = state
+        
+        # Project into subspace: M = VT H V -> (2k, 2k)
+        HV = jnp.dot(H, V_sub)
+        M = jnp.dot(V_sub.T, HV)
+        
+        # local eigen solution
+        vals, evecs = jnp.linalg.eigh(M)
+        
+        best_vals = vals[:npart]
+        best_evecs = evecs[:, :npart]
+        
+        X = jnp.dot(V_sub, best_evecs)
+        HX = jnp.dot(H, X)
+        R = HX - X * best_vals[None, :]
+        
+        # preconditioner: (D - energy)^{-1} * R
+        DIVISION_BY_ZERO_THRESHOLD = 1e-5
+        denom = D[:, None] - best_vals[None, :]
+        denom = jnp.where(jnp.abs(denom) < DIVISION_BY_ZERO_THRESHOLD, DIVISION_BY_ZERO_THRESHOLD, denom)
+        Y = R / denom
+        
+        # 6. Collapse and expand the subspace statically
+        V_next = jnp.concatenate([X, Y], axis=1)
+        V_next = _local_orthonormalize(V_next)
+        
+        return V_next, best_vals
+
+    # Run fixed-iteration loop to avoid dynamic compilation tracing
+    initial_vals = jnp.zeros((npart,), dtype=H.dtype)
+    final_V, final_vals = jax.lax.fori_loop(0, max_iter, body_fun, (V, initial_vals))
+    
+    # Final extraction of the converged Ritz vectors
+    final_M = jnp.dot(final_V.T, jnp.dot(H, final_V))
+    _, final_evecs = jnp.linalg.eigh(final_M)
+    vecs_out = jnp.dot(final_V, final_evecs[:, :npart])
+    
+    return final_vals, vecs_out
 
 def init_density(nstat: int, hole: Tuple[int]):
     dens = jnp.zeros((nstat, nstat))
@@ -64,7 +137,7 @@ def contract_3nf_fused(indices, values, dens):
     return res.at[targets[:, 0], targets[:, 1]].add(updates)
 
 @partial(jax.jit, static_argnames=("npart",))
-def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix):
+def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     gamma = contract_2nf_fused(v2_idx, v2_val, dens)
     omega = contract_3nf_fused(w3_idx, w3_val, dens)
 
@@ -80,7 +153,7 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix):
     energy = e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega
 
     # NOTE: current scaling bottleneck; eigh expects single device; Davidson solver
-    vals, vecs = jnp.linalg.eigh(hf_ham)
+    vals, vecs = davidson_eigh(hf_ham, npart, prev_vecs)
     occ = vecs[:, :npart]
     new_dens = occ @ occ.T
 
@@ -89,15 +162,16 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix):
     
     return updated_dens, energy, diff_dens, vecs
 
-def solve_HF(op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef=None):
+# TODO: split func and auto-diff
+def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef: Chef =None):
     if chef is not None:
-        h1_dense = chef.prepare(op1.to_dense())
+        assert chef.num_nodes == 1 or chef.num_gpus == 1, "HF expects 1D mesh, ensure chef.num_nodes or chef.num_gpus is 1"
+        h1_dense = chef.prepare(op1.to_dense(), rank=0)
         _dens = chef.prepare(dens, rank=0)
-
-        v2_idx = chef.prepare(op2.indices, rank=0)
-        v2_val = chef.prepare(op2.values, rank=0)
-        w3_idx = chef.prepare(op3.indices, rank=0)
-        w3_val = chef.prepare(op3.values, rank=0)
+        v2_idx = chef.prepare(op2.indices)
+        v2_val = chef.prepare(op2.values)
+        w3_idx = chef.prepare(op3.indices)
+        w3_val = chef.prepare(op3.values)
     else:
         # Avoid jnp.asarray if they are already jax arrays, just in case
         h1_dense = jnp.array(op1.to_dense())
@@ -105,19 +179,23 @@ def solve_HF(op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False
         w3_idx, w3_val = jnp.array(op3.indices), jnp.array(op3.values)
         _dens = jnp.array(dens)
     
-    npart = int(jnp.trace(_dens).round())
     prev_energy = 0.0
     converged = False
+    nstat = _dens.shape[0]
+    npart = int(jnp.trace(_dens).round())
+    vecs = jnp.eye(nstat, npart, dtype=_dens.dtype)
+    # _, vecs = jnp.linalg.eigh(dens) # really good but back to same mem issue
+    # vecs = vecs[:, -npart:]
 
-    for i in range(max_iter):
+    for i in range(max_iter): # maybe switch to fori? 
         _dens, energy, diff_dens, vecs = _hf_step(
-            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix
+            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, vecs
         )
         
         # Block only on the scalar to prevent locking the whole GPU graph
         dE = jnp.abs(energy - prev_energy)
         if verbose:
-            energy.block_until_ready()
+            # convert to jax debug logging
             print(f"Iter {i}: E={energy:.8f}, dE={dE:.4e}, dRho={diff_dens:.4e}")
 
         if (diff_dens < eps or dE < 1e-12) and i > 1:
