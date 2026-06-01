@@ -108,6 +108,8 @@ class ThreeBodyOperator(Operator):
 
 class Chef:
     def __init__(self, num_nodes=1, num_gpus=1):
+        self.num_nodes = num_nodes
+        self.num_gpus = num_gpus
         self.mesh = jax.make_mesh(axis_shapes=(num_nodes, num_gpus), axis_names=("nodes", "gpus"))
 
     def prepare(self, arr, rank: int = None, spec: NamedSharding = None):
@@ -120,8 +122,11 @@ class Chef:
                 spec = P() # alternatively can be used for replication
             elif r == 1:
                 spec = P(('nodes', 'gpus')) # 1d array should be split across everything
-            else:
-                spec = P("nodes", "gpus", *([None] * (r - 2)))
+            else: # TODO: handle (1, N) or (N, 1) arrays
+                if self.num_nodes == 1 or self.num_gpus == 1:
+                    spec = P(("nodes", "gpus"), *([None] * (r - 1)))
+                else:
+                    spec = P("nodes", "gpus", *([None] * (r - 2)))
 
         sharding = NamedSharding(self.mesh, spec)
 
