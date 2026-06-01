@@ -215,6 +215,7 @@ class HFSolver(BaseSolver):
         eps: float = 1e-8,
         mix: float = 0.7,
         max_iter: float = 100,
+        # max_eigh_iter: float = 4,
         verbose: float = False,
         chef=None,
     ):
@@ -233,6 +234,8 @@ class HFSolver(BaseSolver):
 
         if self.backend == "jax":
             energy, vecs, conv = hf.solve_HF(
+                self.L,
+                self.a_lat,
                 self.op1,
                 self.op2,
                 self.op3,

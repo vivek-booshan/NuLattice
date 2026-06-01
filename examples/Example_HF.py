@@ -38,13 +38,9 @@ def main():
         sys.exit(1)
 
     print(f"Lattice L = {args.L}")
-    if args.backend == "jax":
-        chef = Chef()
-    else:
-        chef = None
 
     solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
-    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=chef)
+    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=None)
 
     print("-" * 30)
     if conv:
