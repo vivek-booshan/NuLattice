@@ -122,7 +122,7 @@ class ShardingManager:
                 spec = P() # alternatively can be used for replication
             elif r == 1:
                 spec = P(('nodes', 'gpus')) # 1d array should be split across everything
-            else: # TODO: handle (1, N) or (N, 1) arrays
+            else:
                 if self.num_nodes == 1 or self.num_gpus == 1:
                     spec = P(("nodes", "gpus"), *([None] * (r - 1)))
                 else:
