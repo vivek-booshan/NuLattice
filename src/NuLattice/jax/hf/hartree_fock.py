@@ -59,7 +59,7 @@ def davidson_eigh(H, npart, guess_vecs, max_iter=10):
         denom = jnp.where(jnp.abs(denom) < DIVISION_BY_ZERO_THRESHOLD, DIVISION_BY_ZERO_THRESHOLD, denom)
         Y = R / denom
         
-        # 6. Collapse and expand the subspace statically
+        # Collapse and expand the subspace statically
         V_next = jnp.concatenate([X, Y], axis=1)
         V_next = _local_orthonormalize(V_next)
         
@@ -69,7 +69,7 @@ def davidson_eigh(H, npart, guess_vecs, max_iter=10):
     initial_vals = jnp.zeros((npart,), dtype=H.dtype)
     final_V, final_vals = jax.lax.fori_loop(0, max_iter, body_fun, (V, initial_vals))
     
-    # Final extraction of the converged Ritz vectors
+    # Final extraction of the converged vectors
     final_M = jnp.dot(final_V.T, jnp.dot(H, final_V))
     _, final_evecs = jnp.linalg.eigh(final_M)
     vecs_out = jnp.dot(final_V, final_evecs[:, :npart])
@@ -87,54 +87,37 @@ def contract_2nf_fused(indices, values, dens):
     """Fused 2-Body kernel: Performs exactly 1 AllReduce across GPUs."""
     p, q, r, s = indices[:, 0], indices[:, 1], indices[:, 2], indices[:, 3]
     n = dens.shape[0]
-    
-    # Compute the 4 permutation updates
-    t1 = +values * dens[q, s]
-    t2 = -values * dens[p, s]
-    t3 = -values * dens[q, r]
-    t4 = +values * dens[p, r]
-    
-    # Concatenate updates and target indices to force a single Atomic Scatter
-    updates = jnp.concatenate([t1, t2, t3, t4], axis=0)
-    targets = jnp.concatenate([
-        jnp.stack([p, r], axis=1),
-        jnp.stack([q, r], axis=1),
-        jnp.stack([p, s], axis=1),
-        jnp.stack([q, s], axis=1)
-    ], axis=0)
-    
     res = jnp.zeros((n, n), dtype=dens.dtype)
-    return res.at[targets[:, 0], targets[:, 1]].add(updates)
+    res = res.at[p, r].add(+values * dens[q, s])
+    res = res.at[q, r].add(-values * dens[p, s])
+    res = res.at[p, s].add(-values * dens[q, r])
+    res = res.at[q, s].add(+values * dens[p, r])
+    return res
+    
 
 @jax.jit
 def contract_3nf_fused(indices, values, dens):
     """Fused 3-Body kernel: Performs exactly 1 AllReduce across GPUs."""
-    a, b, c, d, e, f = [indices[:, i] for i in range(6)]
+    a, b, c = indices[:, 0], indices[:, 1], indices[:, 2]
+    d, e, f = indices[:, 3], indices[:, 4], indices[:, 5]
+
     n = dens.shape[0]
     v2 = values * 2.0
-    
-    # Compute all 9 terms sequentially (held in GPU registers)
-    t1 = v2 * (dens[b, e] * dens[c, f] - dens[c, e] * dens[b, f])
-    t2 = v2 * (dens[c, e] * dens[a, f] - dens[a, e] * dens[c, f])
-    t3 = v2 * (dens[a, e] * dens[b, f] - dens[b, e] * dens[a, f])
-    
-    t4 = v2 * (dens[b, f] * dens[c, d] - dens[c, f] * dens[b, d])
-    t5 = v2 * (dens[c, f] * dens[a, d] - dens[a, f] * dens[c, d])
-    t6 = v2 * (dens[a, f] * dens[b, d] - dens[b, f] * dens[a, d])
-    
-    t7 = v2 * (dens[b, d] * dens[c, e] - dens[c, d] * dens[b, e])
-    t8 = v2 * (dens[c, d] * dens[a, e] - dens[a, d] * dens[c, e])
-    t9 = v2 * (dens[a, d] * dens[b, e] - dens[b, d] * dens[a, e])
-    
-    updates = jnp.concatenate([t1, t2, t3, t4, t5, t6, t7, t8, t9], axis=0)
-    targets = jnp.concatenate([
-        jnp.stack([a, d], axis=1), jnp.stack([b, d], axis=1), jnp.stack([c, d], axis=1),
-        jnp.stack([a, e], axis=1), jnp.stack([b, e], axis=1), jnp.stack([c, e], axis=1),
-        jnp.stack([a, f], axis=1), jnp.stack([b, f], axis=1), jnp.stack([c, f], axis=1)
-    ], axis=0)
-
     res = jnp.zeros((n, n), dtype=dens.dtype)
-    return res.at[targets[:, 0], targets[:, 1]].add(updates)
+
+    res = res.at[a, d].add(v2 * (dens[b, e] * dens[c, f] - dens[c, e] * dens[b, f]))
+    res = res.at[b, d].add(v2 * (dens[c, e] * dens[a, f] - dens[a, e] * dens[c, f]))
+    res = res.at[c, d].add(v2 * (dens[a, e] * dens[b, f] - dens[b, e] * dens[a, f]))
+
+    res = res.at[a, e].add(v2 * (dens[b, f] * dens[c, d] - dens[c, f] * dens[b, d]))
+    res = res.at[b, e].add(v2 * (dens[c, f] * dens[a, d] - dens[a, f] * dens[c, d]))
+    res = res.at[c, e].add(v2 * (dens[a, f] * dens[b, d] - dens[b, f] * dens[a, d]))
+
+    res = res.at[a, f].add(v2 * (dens[b, d] * dens[c, e] - dens[c, d] * dens[b, e]))
+    res = res.at[b, f].add(v2 * (dens[c, d] * dens[a, e] - dens[a, d] * dens[c, e]))
+    res = res.at[c, f].add(v2 * (dens[a, d] * dens[b, e] - dens[b, d] * dens[a, e]))
+    
+    return res
 
 @partial(jax.jit, static_argnames=("npart", "eigh_solver"))
 def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs, eigh_solver):
@@ -152,9 +135,6 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs, ei
     e_omega = jnp.sum(omega * dens)
     energy = e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega
 
-    # NOTE: current scaling bottleneck; eigh expects single device; Davidson solver
-    # vals, vecs = davidson_eigh(hf_ham, npart, prev_vecs)
-    # _, vecs = jnp.linalg.eigh(hf_ham)
     _, vecs = eigh_solver(hf_ham, npart, prev_vecs)
     occ = vecs[:, :npart]
     new_dens = occ @ occ.T
@@ -184,7 +164,6 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
 
     prev_energy = 0.0
     converged = False
-    nstat = _dens.shape[0]
     npart = int(span_multiplier * jnp.trace(_dens).round())
 
     if method == "davidson":
@@ -194,11 +173,9 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
             return jnp.linalg.eigh(x)
         eigh_solver = default_eigh
 
-    # vecs = jnp.eye(nstat, npart, dtype=_dens.dtype)
-    # _, vecs = jnp.linalg.eigh(dens) # really good but back to same mem issue
-    # vecs = vecs[:, -npart:]
+    # NOTE(vivek): _dens already diagonal but diag(dens) returns as 1d vector
     top_indices = jnp.argsort(jnp.diag(_dens))[-npart:]
-    vecs = _dens[:, top_indices]
+    vecs = dens[:, top_indices]
 
     for i in range(max_iter): # maybe switch to fori? 
         _dens, energy, diff_dens, vecs = _hf_step(
