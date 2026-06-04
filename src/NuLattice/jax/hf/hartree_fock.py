@@ -136,8 +136,8 @@ def contract_3nf_fused(indices, values, dens):
     res = jnp.zeros((n, n), dtype=dens.dtype)
     return res.at[targets[:, 0], targets[:, 1]].add(updates)
 
-@partial(jax.jit, static_argnames=("npart",))
-def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
+@partial(jax.jit, static_argnames=("npart", "eigh_solver"))
+def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs, eigh_solver):
     gamma = contract_2nf_fused(v2_idx, v2_val, dens)
     omega = contract_3nf_fused(w3_idx, w3_val, dens)
 
@@ -153,7 +153,9 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     energy = e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega
 
     # NOTE: current scaling bottleneck; eigh expects single device; Davidson solver
-    vals, vecs = davidson_eigh(hf_ham, npart, prev_vecs)
+    # vals, vecs = davidson_eigh(hf_ham, npart, prev_vecs)
+    # _, vecs = jnp.linalg.eigh(hf_ham)
+    _, vecs = eigh_solver(hf_ham, npart, prev_vecs)
     occ = vecs[:, :npart]
     new_dens = occ @ occ.T
 
@@ -163,7 +165,8 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     return updated_dens, energy, diff_dens, vecs
 
 # TODO: split func and auto-diff
-def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef: Chef =None):
+def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef: Chef =None, span_multiplier: float = 1, method=None):
+    assert span_multiplier >= 1, "span_multiplier must be greater than 1"
     if chef is not None:
         assert chef.num_nodes == 1 or chef.num_gpus == 1, "HF expects 1D mesh, ensure chef.num_nodes or chef.num_gpus is 1"
         h1_dense = chef.prepare(op1.to_dense(), rank=0)
@@ -178,18 +181,28 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
         v2_idx, v2_val = jnp.array(op2.indices), jnp.array(op2.values)
         w3_idx, w3_val = jnp.array(op3.indices), jnp.array(op3.values)
         _dens = jnp.array(dens)
-    
+
     prev_energy = 0.0
     converged = False
     nstat = _dens.shape[0]
-    npart = int(jnp.trace(_dens).round())
-    vecs = jnp.eye(nstat, npart, dtype=_dens.dtype)
+    npart = int(span_multiplier * jnp.trace(_dens).round())
+
+    if method == "davidson":
+        eigh_solver = davidson_eigh
+    else:
+        def default_eigh(x, npart, vecs):
+            return jnp.linalg.eigh(x)
+        eigh_solver = default_eigh
+
+    # vecs = jnp.eye(nstat, npart, dtype=_dens.dtype)
     # _, vecs = jnp.linalg.eigh(dens) # really good but back to same mem issue
     # vecs = vecs[:, -npart:]
+    top_indices = jnp.argsort(jnp.diag(_dens))[-npart:]
+    vecs = _dens[:, top_indices]
 
     for i in range(max_iter): # maybe switch to fori? 
         _dens, energy, diff_dens, vecs = _hf_step(
-            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, vecs
+            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, vecs, eigh_solver
         )
         
         # Block only on the scalar to prevent locking the whole GPU graph
@@ -198,7 +211,7 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
             # convert to jax debug logging
             print(f"Iter {i}: E={energy:.8f}, dE={dE:.4e}, dRho={diff_dens:.4e}")
 
-        if (diff_dens < eps or dE < 1e-12) and i > 1:
+        if (diff_dens < eps or dE < eps) and i > 1:
             converged = True
             break
         

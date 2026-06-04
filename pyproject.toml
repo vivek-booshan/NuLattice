@@ -41,6 +41,10 @@ rocm = [
     "jax[rocm]==0.5.0",
 ]
 
+cuda = [
+    "jax[cuda]"
+]
+
 [[tool.uv.index]]
 name = "pytorch-rocm"
 url = "https://download.pytorch.org/whl/rocm6.3"

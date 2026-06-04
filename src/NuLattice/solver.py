@@ -218,6 +218,8 @@ class HFSolver(BaseSolver):
         # max_eigh_iter: float = 4,
         verbose: float = False,
         chef=None,
+        span_multiplier=1.0,
+        method=None,
     ):
         if self.backend == "cpu":
             import NuLattice.HF.hartree_fock as hf
@@ -245,6 +247,8 @@ class HFSolver(BaseSolver):
                 max_iter=max_iter,
                 verbose=verbose,
                 chef=chef,
+                span_multiplier=span_multiplier,
+                method=method,
             )
         else:
             energy, vecs, conv = hf.solve_HF(
