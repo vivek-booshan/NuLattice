@@ -1,0 +1,81 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.23.5",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "a5764f6b2ec4cbb1ec1d637b7519b9ca",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "YTkD",
+      "code_hash": "7fe550c4e9d519595b8240920d37fdc7",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "--- Analysis for P = 2032 ---\nNodes    | GPUs     | Total    | P/Total (Local Rows)\n--------------------------------------------------\n1        | 1        | 1        | 2032\n1        | 2        | 2        | 1016\n1        | 4        | 4        | 508\n1        | 8        | 8        | 254\n2        | 1        | 2        | 1016\n2        | 2        | 4        | 508\n2        | 4        | 8        | 254\n2        | 8        | 16       | 127\n4        | 1        | 4        | 508\n4        | 2        | 8        | 254\n4        | 4        | 16       | 127\n8        | 1        | 8        | 254\n8        | 2        | 16       | 127\n16       | 1        | 16       | 127\n127      | 1        | 127      | 16\n127      | 2        | 254      | 8\n127      | 4        | 508      | 4\n127      | 8        | 1016     | 2\n",
+          "mimetype": "text/plain"
+        }
+      ]
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "40efb3c138b756c1d54e249d872c1a63",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "shard transpose: 0.09576291311532259 seconds\nbasic transpose: 0.03965356294065714 seconds\n",
+          "mimetype": "text/plain"
+        }
+      ]
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "e4e4a02b9fdbd4a4ec7cfd81263d0d6a",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": null,
+      "outputs": [],
+      "console": []
+    }
+  ]
+}

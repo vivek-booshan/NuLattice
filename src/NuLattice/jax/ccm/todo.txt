@@ -1,0 +1,13 @@
+remove to_tensor dependency (done)
+remove dense branches to tighten compilation logic (done)
+switch from sharding to replicating sparse matrices
+decrease memory usage in DIIS logic
+
+move setup to cpu (done-ish)
+create higher level func to orchestrate setup & solver
+in-place sharding construction
+
+op_name="jit(t1Iter)/jit(main)/jit(_diag)/jit(diagonal)/cond/branch_1_fun/gather" source_line=69
+all-gather-start(bitcast.1510.0) ... metadata={op_name="jit(t1Iter)/jit(main)/cikl, cakl -> ai/dot_general" ... source_line=77}
+all-gather-start.2(bitcast.1510.0) ... metadata={op_name="jit(t1Iter)/jit(main)/dckl, dakl -> ac/dot_general" ... source_line=92}
+all-to-all.2.1 ... metadata={op_name="jit(t1Iter)/jit(main)/sub" source_line=88}
