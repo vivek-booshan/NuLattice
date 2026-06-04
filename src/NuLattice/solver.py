@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from NuLattice.utils import ReferenceState
 
 
+# TODO: delete this?
 @dataclass(frozen=True, slots=True)
 class Coupling:
     """
@@ -61,6 +62,7 @@ class Coupling:
         return self.vS1 / (self.vT1 + 1e-12)
 
 
+# TODO: __repr__ and logging
 class BaseSolver:
     def __init__(
         self,
@@ -202,8 +204,10 @@ class HFSolver(BaseSolver):
     ):
         if self.backend == "cpu":
             import NuLattice.cpu.hf.hartree_fock as hf
-        else:
+        elif self.backend == "jax":
             import NuLattice.jax.hf.hartree_fock as hf
+        else:
+            raise ValueError("Unknown backend. Select <cpu|jax>")
 
         nstat = len(self.basis)
         hole = ReferenceState.holes(self.state, self.basis)
