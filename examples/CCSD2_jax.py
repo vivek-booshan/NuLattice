@@ -22,7 +22,6 @@ def main():
     parser.add_argument("--mixing", type=float, default=0.5, help="Mixing parameter for iterations")
     parser.add_argument("--delta", type=float, default=0.0, help="Energy shift to avoid division by zero")
     
-    parser.add_argument("--sparse", action="store_false", default=True, help="use sparse matrices (default True)")
     parser.add_argument("--quiet", action="store_false", dest="verbose", default=True, help="Suppress iteration output")
     parser.add_argument("--shard", action="store_true", default=False, help="sharding flag")
 
