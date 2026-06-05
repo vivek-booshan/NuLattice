@@ -1,18 +1,22 @@
 import jax
 import jax.numpy as jnp
 
+@jax.jit
 def antisymmetrize_2b_pq(a2: jax.Array) -> jax.Array:
     """Antisymmetrizes w.r.t. first two indices (pq)."""
     return 0.5 * (a2 - a2.transpose(1, 0, 2, 3))
 
+@jax.jit
 def antisymmetrize_2b_rs(a2: jax.Array) -> jax.Array:
     """Antisymmetrizes w.r.t. last two indices (rs)."""
     return 0.5 * (a2 - a2.transpose(0, 1, 3, 2))
 
+@jax.jit
 def antisymmetrize_2b(a2: jax.Array) -> jax.Array:
     """Fully antisymmetrizes a two-body operator."""
     return antisymmetrize_2b_rs(antisymmetrize_2b_pq(a2))
 
+@jax.jit
 def evaluate_comm_110(occs, a1, b1):
     """[1,1]->0 commutator."""
     occsbar = 1.0 - occs
@@ -21,15 +25,18 @@ def evaluate_comm_110(occs, a1, b1):
     val = jnp.sum(weight * a1 * b1.T) - jnp.sum(weight.T * a1 * b1.T)
     return val
 
+@jax.jit
 def evaluate_comm_111(occs, a1, b1):
     """[1,1]->1 commutator: Standard Matrix Commutator [A, B]."""
     return jnp.matmul(a1, b1) - jnp.matmul(b1, a1)
 
+@jax.jit
 def evaluate_comm_121(occs, a1, b2):
     """[1,2]->1 commutator."""
     ph_factor = occs[:, None] - occs[None, :]
     return jnp.einsum("pq,iqjp->ij", ph_factor * a1, b2)
 
+@jax.jit
 def evaluate_comm_122(occs, a1, b2):
     """[1,2]->2 commutator."""
     dim = a1.shape[0]
@@ -38,6 +45,7 @@ def evaluate_comm_122(occs, a1, b2):
     term2 = jnp.einsum("pk,ijpl->ijkl", a1, b2)
     return antisymmetrize_2b(2.0 * (term1 - term2))
 
+@jax.jit
 def evaluate_comm_220(occs, a2, b2):
     """[2,2]->0 commutator."""
     occsbar = 1.0 - occs
@@ -48,6 +56,7 @@ def evaluate_comm_220(occs, a2, b2):
     val -= jnp.sum(w.transpose(2, 3, 0, 1) * a2 * b2.transpose(2, 3, 0, 1))
     return 0.25 * val
 
+@jax.jit
 def evaluate_comm_221(occs, a2, b2):
     """[2,2]->1 commutator optimized for M4 AMX."""
     dim = len(occs)
@@ -66,6 +75,7 @@ def evaluate_comm_221(occs, a2, b2):
     
     return 0.5 * (jnp.matmul(a_w, b_tr) - jnp.matmul(b_w, a_tr))
 
+@jax.jit
 def evaluate_comm_222_pphh(occs, a2, b2):
     """[2,2]->2 pphh (O(N^6) bottleneck)."""
     dim = len(occs)
@@ -83,6 +93,7 @@ def evaluate_comm_222_pphh(occs, a2, b2):
     res = 0.5 * (jnp.matmul(A_q, B_mat) - jnp.matmul(B_q, A_mat))
     return res.reshape(dim, dim, dim, dim)
 
+@jax.jit
 def evaluate_comm_222_ph(occs, a2, b2):
     """[2,2]->2 ph (O(N^6) bottleneck)."""
     dim = len(occs)
@@ -96,6 +107,7 @@ def evaluate_comm_222_ph(occs, a2, b2):
     c_ph = jnp.matmul(a_ph, b_ph).reshape(dim, dim, dim, dim).transpose(2, 0, 1, 3)
     return antisymmetrize_2b(-4.0 * c_ph)
 
+@jax.jit
 def evaluate_imsrg2_commutator(occs, a1, a2, b1, b2):
     res0 = evaluate_comm_110(occs, a1, b1) + evaluate_comm_220(occs, a2, b2)
     
