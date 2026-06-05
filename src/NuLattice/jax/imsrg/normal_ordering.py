@@ -66,8 +66,8 @@ def _accumulate_2b_contributions(p, q, r, s, val, occs, e0_arr, f, gamma):
 
     # 1-Body (Fock) Contribution: Contraction over q=s
     q_s_mask = (q == s)
-    term = jnp.where(q_s_mask, occs[p] * val, 0.0)
-    f.at[p, r].add(term)
+    term = jnp.where(q_s_mask, occs[q] * val, 0.0)
+    f = f.at[p, r].add(term)
 
     p_r_mask = q_s_mask & (p == r)
     e0_term = jnp.where(p_r_mask, 0.5 * occs[p] * term, 0.0)
