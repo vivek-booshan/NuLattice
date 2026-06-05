@@ -4,7 +4,7 @@ from typing import Tuple
 import numpy as np
 
 from NuLattice.constants import HBARC, MASS
-from NuLattice._types import (
+from NuLattice.utils._types import (
     # old types
     LatticeState,
     LatticeSite,
