@@ -11,16 +11,18 @@ __date__ = "2025-09-03"
 import jax
 import jax.numpy as jnp
 
+@jax.jit
 def get_hole_spes(occs: jax.Array, f: jax.Array) -> jax.Array:
     """
-    Extracts single-particle energies for hole states using PyTorch masking.
+    Extracts single-particle energies for hole states
     """
     return occs * jnp.diag(f)
 
 
+@jax.jit
 def get_particle_spes(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
-    Extracts single-particle energies for particle states using PyTorch masking.
+    Extracts single-particle energies for particle states
     """
     return (1 - occs) * (jnp.diag(f) + delta)
 
@@ -28,7 +30,6 @@ def get_particle_spes(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.
 def build_1b_energy_difference(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs one-body energy differences (eps_i - eps_a).
-    Uses broadcasting to avoid O(N^2) loops.
     """
     spe_h = get_hole_spes(occs, f)
     spe_p = get_particle_spes(occs, f, delta)
@@ -58,7 +59,7 @@ def build_2b_energy_difference(occs: jax.Array, f: jax.Array, delta: float = 0.0
     )
 
     # Antisymmetrize to fill the pphh block
-    return gamma_hhpp - gamma_hhpp.permute(2, 3, 0, 1) + 1e-20
+    return gamma_hhpp - gamma_hhpp.transpose(2, 3, 0, 1) + 1e-20
 
 
 def build_1b_arctan_generator(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
@@ -74,7 +75,7 @@ def build_1b_arctan_generator(occs: jax.Array, f: jax.Array, delta: float = 0.0)
 
     eta = jnp.zeros_like(f)
     
-    eta[hp_mask] = 0.5 * jnp.arctan(2 * f[hp_mask] / e_diff[hp_mask])
+    eta = eta.at[hp_mask].set(0.5 * jnp.arctan(2 * f[hp_mask] / e_diff[hp_mask]))
 
     return eta
 
@@ -93,12 +94,12 @@ def build_2b_arctan_generator(occs: jax.Array, f: jax.Array, gamma: jax.Array, d
         p[None, None, :, None] & p[None, None, None, :]
     )
 
-    pphh_mask = hhpp_mask.permute(2, 3, 0, 1)
+    pphh_mask = hhpp_mask.transpose(2, 3, 0, 1)
 
     mask = hhpp_mask | pphh_mask
 
     eta = jnp.zeros_like(gamma)
     
-    eta[mask] = 0.5 * jnp.arctan(2 * gamma[mask] / e_diff[mask])
+    eta = eta.at[mask].set(0.5 * jnp.arctan(2 * gamma[mask] / e_diff[mask]))
 
     return eta

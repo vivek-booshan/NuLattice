@@ -3,11 +3,11 @@ import jax.numpy as jnp
 
 def antisymmetrize_2b_pq(a2: jax.Array) -> jax.Array:
     """Antisymmetrizes w.r.t. first two indices (pq)."""
-    return 0.5 * (a2 - a2.transpose(0, 1))
+    return 0.5 * (a2 - a2.transpose(1, 0, 2, 3))
 
 def antisymmetrize_2b_rs(a2: jax.Array) -> jax.Array:
     """Antisymmetrizes w.r.t. last two indices (rs)."""
-    return 0.5 * (a2 - a2.transpose(2, 3))
+    return 0.5 * (a2 - a2.transpose(0, 1, 3, 2))
 
 def antisymmetrize_2b(a2: jax.Array) -> jax.Array:
     """Fully antisymmetrizes a two-body operator."""
@@ -44,8 +44,8 @@ def evaluate_comm_220(occs, a2, b2):
     # Weight tensor: n_p n_q nbar_r nbar_s
     w = (occs[:, None, None, None] * occs[None, :, None, None] * occsbar[None, None, :, None] * occsbar[None, None, None, :])
     
-    val = jnp.sum(w * a2 * b2.permute(2, 3, 0, 1))
-    val -= jnp.sum(w.permute(2, 3, 0, 1) * a2 * b2.permute(2, 3, 0, 1))
+    val = jnp.sum(w * a2 * b2.transpose(2, 3, 0, 1))
+    val -= jnp.sum(w.transpose(2, 3, 0, 1) * a2 * b2.transpose(2, 3, 0, 1))
     return 0.25 * val
 
 def evaluate_comm_221(occs, a2, b2):
@@ -61,8 +61,8 @@ def evaluate_comm_221(occs, a2, b2):
     b_w = (b2 * w).reshape(dim, -1)
     
     # pqjr -> rpqj
-    a_tr = a2.permute(3, 0, 1, 2).reshape(-1, dim)
-    b_tr = b2.permute(3, 0, 1, 2).reshape(-1, dim)
+    a_tr = a2.transpose(3, 0, 1, 2).reshape(-1, dim)
+    b_tr = b2.transpose(3, 0, 1, 2).reshape(-1, dim)
     
     return 0.5 * (jnp.matmul(a_w, b_tr) - jnp.matmul(b_w, a_tr))
 
@@ -90,10 +90,10 @@ def evaluate_comm_222_ph(occs, a2, b2):
     
     # Reorder for contraction (pjkq, iqpl -> ijkl)
     # Aligning indices for Matrix Multiplication
-    a_ph = (a2 * ph_factor[:, None, None, :]).permute(1, 2, 0, 3).reshape(dim**2, dim**2)
-    b_ph = b2.permute(2, 1, 0, 3).reshape(dim**2, dim**2)
+    a_ph = (a2 * ph_factor[:, None, None, :]).transpose(1, 2, 0, 3).reshape(dim**2, dim**2)
+    b_ph = b2.transpose(2, 1, 0, 3).reshape(dim**2, dim**2)
     
-    c_ph = jnp.matmul(a_ph, b_ph).reshape(dim, dim, dim, dim).permute(2, 0, 1, 3)
+    c_ph = jnp.matmul(a_ph, b_ph).reshape(dim, dim, dim, dim).transpose(2, 0, 1, 3)
     return antisymmetrize_2b(-4.0 * c_ph)
 
 def evaluate_imsrg2_commutator(occs, a1, a2, b1, b2):

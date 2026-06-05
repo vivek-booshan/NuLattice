@@ -76,10 +76,10 @@ def imsrg_rhs(
     gen1 = generator.build_1b_arctan_generator(occs, f, delta)
     gen2 = generator.build_2b_arctan_generator(occs, f, gamma, delta)
 
-    norm_gen1 = jax.linalg.norm(gen1)
-    norm_gen2 = jax.linalg.norm(gen2)
+    norm_gen1 = jnp.linalg.norm(gen1)
+    norm_gen2 = jnp.linalg.norm(gen2)
 
-    total_norm = jax.sqrt(norm_gen1**2 + norm_gen2**2)
+    total_norm = jnp.sqrt(norm_gen1**2 + norm_gen2**2)
 
     # Commutators [eta, H]
     # Calculate these unconditionally to keep the computation graph static
@@ -90,11 +90,11 @@ def imsrg_rhs(
     if not isinstance(dh0, jax.Array):
         dh0 = jax.tensor(dh0, dtype=e.dtype, device=e.device)
 
-    final_dh0 = jax.where(
-        is_converged, jax.tensor(0.0, device=e.device, dtype=e.dtype), dh0
+    final_dh0 = jnp.where(
+        is_converged, jnp.array(0.0, device=e.device, dtype=e.dtype), dh0
     )
-    final_dh1 = jax.where(is_converged, jax.zeros_like(f), dh1)
-    final_dh2 = jax.where(is_converged, jax.zeros_like(gamma), dh2)
+    final_dh1 = jnp.where(is_converged, jnp.zeros_like(f), dh1)
+    final_dh2 = jnp.where(is_converged, jnp.zeros_like(gamma), dh2)
 
     return (final_dh0, final_dh1, final_dh2)
 
@@ -188,14 +188,14 @@ def error_ratio(error_tree, atol=1e-6, rtol=1e-6, y=None):
     """
 
     def sq_err(err, y_val):
-        scale = atol + jax.abs(y_val) * rtol
-        return jax.sum((err / scale) ** 2)
+        scale = atol + jnp.abs(y_val) * rtol
+        return jnp.sum((err / scale) ** 2)
 
     squared_errors = jax.tree_map(sq_err, error_tree, y)
     sum_sq_error = sum(squared_errors)
-    num_elements = sum(x.numel() for x in y)
+    num_elements = sum(x.size for x in y)
 
-    return jax.sqrt(sum_sq_error / num_elements)
+    return jnp.sqrt(sum_sq_error / num_elements)
 
 
 def solve_imsrg2(
@@ -222,13 +222,13 @@ def solve_imsrg2(
     dt = 0.01
 
     # do not recompile for variables
-    s_t = jax.array(s, device=occs.device)
-    dt_t = jax.array(dt, device=occs.device)
+    s_t = s
+    dt_t = dt
 
     rhs_args = (occs, delta, eta_criterion)
     data_tracking = []
 
-    rtol, atol, safety = 1e-6, 1e-6, 0.9
+    rtol, atol, safety = 1e-8, 1e-8, 0.9
 
     if track_data:
         print(f"{'s':>8}  {'Energy':>14}  {'||eta1||':>12}  {'||eta2||':>12}")
@@ -238,8 +238,8 @@ def solve_imsrg2(
         if s + dt > s_max:
             dt = s_max - s
 
-        s_t.at[:].set(s)
-        dt_t.at[:].set(dt)
+        s_t = s
+        dt_t = dt
         y_new, y_err, _ = dopri5_step(imsrg_rhs, s_t, dt_t, y, rhs_args)
 
         err_val = error_ratio(y_err, atol, rtol, y).item()
