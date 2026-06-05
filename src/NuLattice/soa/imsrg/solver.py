@@ -215,8 +215,17 @@ def solve_imsrg2(
     Integrates the IMSRG flow equations from initial to final flow parameter
     values, returning the converged energy (and flow data for possible further analysis)
     """
+    if not isinstance(occs, torch.Tensor):
+        occs = torch.as_tensor(occs, dtype=torch.float64)
+
+    if not isinstance(f, torch.Tensor):
+        f = torch.as_tensor(f, dtype=torch.float64)
+
     if not isinstance(e0, torch.Tensor):
-        e0 = torch.tensor(e0, dtype=f.dtype, device=f.device)
+        e0 = torch.as_tensor(e0, dtype=torch.float64)
+
+    if not isinstance(gamma, torch.Tensor):
+        gamma = torch.as_tensor(gamma, dtype=torch.float64)
 
     y = (e0, f, gamma)
 
@@ -224,15 +233,15 @@ def solve_imsrg2(
     dt = 0.01
 
     # do not recompile for variables
-    s_t = torch.tensor(s, device=occs.device)
-    dt_t = torch.tensor(dt, device=occs.device)
+    s_t = torch.tensor(s, dtype=torch.float64, device=occs.device)
+    dt_t = torch.tensor(dt, dtype=torch.float64, device=occs.device)
     torch._dynamo.mark_dynamic(s_t, 0)
     torch._dynamo.mark_dynamic(dt_t, 0)
 
     rhs_args = (occs, delta, eta_criterion)
     data_tracking = []
 
-    rtol, atol, safety = 1e-6, 1e-6, 0.9
+    rtol, atol, safety = 1e-8, 1e-8, 0.9
 
     if track_data:
         print(f"{'s':>8}  {'Energy':>14}  {'||eta1||':>12}  {'||eta2||':>12}")

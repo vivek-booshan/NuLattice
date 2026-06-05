@@ -9,7 +9,7 @@ __copyright__ = "(c) Matthias Heinz"
 __license__ = "BSD-3-Clause"
 __date__ = "2025-09-03"
 
-from NuLattice._types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
+from NuLattice.utils._types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
 
 import numpy as np
 from typing import Optional
@@ -48,10 +48,11 @@ def create_occupations(basis, ref_indices):
     :param n_stat: Total number of single-particle states (int)
     :param ref_indices: Array of indices that are occupied (np.ndarray)
     """
-    matches = (basis[:, None, :] == ref_indices[None, :, :]).all(axis=2)
-    return matches.any(axis=1).astype(np.float64)
-
-
+    occs = np.zeros(shape=len(basis))
+    for idx in ref_indices:
+        i = basis.index(idx)
+        occs[i] = 1.0
+    return occs
 
 @njit
 def _compute_op1_kernel(h1, dim, occs, e0_arr, f):
