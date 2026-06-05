@@ -1,10 +1,11 @@
-import torch
+import jax
+import jax.numpy as jnp
 from typing import Tuple, Callable, Iterable
 from . import generator
-from . import commutator
+from .commutator import evaluate_imsrg2_commutator
 
 # fuse the 9 kernels together
-evaluate_imsrg2_commutator = torch.compile(commutator.evaluate_imsrg2_commutator)
+# evaluate_imsrg2_commutator = torch.compile(commutator.evaluate_imsrg2_commutator)
 
 # --- DOPRI5 CONSTANTS (The Butcher Tableau) ---
 # Hardcoded for performance
@@ -38,7 +39,7 @@ E6 = 11.0 / 84.0 - 187.0 / 2100.0
 E7 = -1.0 / 40.0
 
 # NOTE(vivek): Ensure 'e' is a 0-dim Tensor (torch.tensor(0.0)), not a float, for consistency.
-State = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+State = Tuple[jax.Array, jax.Array, jax.Array]
 
 
 def tree_map(func: Callable, *trees: Iterable) -> Tuple:
@@ -50,12 +51,12 @@ def tree_map(func: Callable, *trees: Iterable) -> Tuple:
 
 
 def imsrg_rhs(
-    s: float | torch.Tensor,
+    s: float | jax.Array,
     state: State,
-    occs: torch.Tensor,
+    occs: jax.Array,
     delta: float,
     eta_criterion: float = 1e-3,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> State:
     """
     Right-hand side function for IMSRG flow equations
 
@@ -75,10 +76,10 @@ def imsrg_rhs(
     gen1 = generator.build_1b_arctan_generator(occs, f, delta)
     gen2 = generator.build_2b_arctan_generator(occs, f, gamma, delta)
 
-    norm_gen1 = torch.linalg.norm(gen1)
-    norm_gen2 = torch.linalg.norm(gen2)
+    norm_gen1 = jax.linalg.norm(gen1)
+    norm_gen2 = jax.linalg.norm(gen2)
 
-    total_norm = torch.sqrt(norm_gen1**2 + norm_gen2**2)
+    total_norm = jax.sqrt(norm_gen1**2 + norm_gen2**2)
 
     # Commutators [eta, H]
     # Calculate these unconditionally to keep the computation graph static
@@ -86,19 +87,18 @@ def imsrg_rhs(
 
     is_converged = total_norm < eta_criterion
 
-    if not isinstance(dh0, torch.Tensor):
-        dh0 = torch.tensor(dh0, dtype=e.dtype, device=e.device)
+    if not isinstance(dh0, jax.Array):
+        dh0 = jax.tensor(dh0, dtype=e.dtype, device=e.device)
 
-    final_dh0 = torch.where(
-        is_converged, torch.tensor(0.0, device=e.device, dtype=e.dtype), dh0
+    final_dh0 = jax.where(
+        is_converged, jax.tensor(0.0, device=e.device, dtype=e.dtype), dh0
     )
-    final_dh1 = torch.where(is_converged, torch.zeros_like(f), dh1)
-    final_dh2 = torch.where(is_converged, torch.zeros_like(gamma), dh2)
+    final_dh1 = jax.where(is_converged, jax.zeros_like(f), dh1)
+    final_dh2 = jax.where(is_converged, jax.zeros_like(gamma), dh2)
 
     return (final_dh0, final_dh1, final_dh2)
 
 
-@torch.compile
 def dopri5_step(
     rhs_fn: Callable, s: float, dt: float, y: State, args: tuple
 ) -> Tuple[State, State, State]:
@@ -106,15 +106,15 @@ def dopri5_step(
     k1 = rhs_fn(s, y, *args)
 
     # --- Stage 2 ---
-    y2 = tree_map(lambda y_, k1_: y_ + dt * (A21 * k1_), y, k1)
+    y2 = jax.tree_map(lambda y_, k1_: y_ + dt * (A21 * k1_), y, k1)
     k2 = rhs_fn(s + 0.2 * dt, y2, *args)
 
     # --- Stage 3 ---
-    y3 = tree_map(lambda y_, k1_, k2_: y_ + dt * (A31 * k1_ + A32 * k2_), y, k1, k2)
+    y3 = jax.tree_map(lambda y_, k1_, k2_: y_ + dt * (A31 * k1_ + A32 * k2_), y, k1, k2)
     k3 = rhs_fn(s + 0.3 * dt, y3, *args)
 
     # --- Stage 4 ---
-    y4 = tree_map(
+    y4 = jax.tree_map(
         lambda y_, k1_, k2_, k3_: y_ + dt * (A41 * k1_ + A42 * k2_ + A43 * k3_),
         y,
         k1,
@@ -124,7 +124,7 @@ def dopri5_step(
     k4 = rhs_fn(s + 0.8 * dt, y4, *args)
 
     # --- Stage 5 ---
-    y5 = tree_map(
+    y5 = jax.tree_map(
         lambda y_, k1_, k2_, k3_, k4_: (
             y_ + dt * (A51 * k1_ + A52 * k2_ + A53 * k3_ + A54 * k4_)
         ),
@@ -137,7 +137,7 @@ def dopri5_step(
     k5 = rhs_fn(s + (8 / 9) * dt, y5, *args)
 
     # --- Stage 6 ---
-    y6 = tree_map(
+    y6 = jax.tree_map(
         lambda y_, k1_, k2_, k3_, k4_, k5_: (
             y_ + dt * (A61 * k1_ + A62 * k2_ + A63 * k3_ + A64 * k4_ + A65 * k5_)
         ),
@@ -151,7 +151,7 @@ def dopri5_step(
     k6 = rhs_fn(s + dt, y6, *args)
 
     # --- Stage 7 ---
-    y_next = tree_map(
+    y_next = jax.tree_map(
         lambda y_, k1_, k3_, k4_, k5_, k6_: (
             y_ + dt * (A71 * k1_ + A73 * k3_ + A74 * k4_ + A75 * k5_ + A76 * k6_)
         ),
@@ -167,7 +167,7 @@ def dopri5_step(
     k7 = rhs_fn(s + dt, y_next, *args)
 
     # --- Error Estimation ---
-    y_err = tree_map(
+    y_err = jax.tree_map(
         lambda k1_, k3_, k4_, k5_, k6_, k7_: (
             dt * (E1 * k1_ + E3 * k3_ + E4 * k4_ + E5 * k5_ + E6 * k6_ + E7 * k7_)
         ),
@@ -188,21 +188,21 @@ def error_ratio(error_tree, atol=1e-6, rtol=1e-6, y=None):
     """
 
     def sq_err(err, y_val):
-        scale = atol + torch.abs(y_val) * rtol
-        return torch.sum((err / scale) ** 2)
+        scale = atol + jax.abs(y_val) * rtol
+        return jax.sum((err / scale) ** 2)
 
-    squared_errors = tree_map(sq_err, error_tree, y)
+    squared_errors = jax.tree_map(sq_err, error_tree, y)
     sum_sq_error = sum(squared_errors)
     num_elements = sum(x.numel() for x in y)
 
-    return torch.sqrt(sum_sq_error / num_elements)
+    return jax.sqrt(sum_sq_error / num_elements)
 
 
 def solve_imsrg2(
-    occs: torch.Tensor,
-    e0: float | torch.Tensor,
-    f: torch.Tensor,
-    gamma: torch.Tensor,
+    occs: jax.Array,
+    e0: float | jax.Array,
+    f: jax.Array,
+    gamma: jax.Array,
     s_init:float=0.0,
     s_max:float=40.0,
     delta:float=0.0,
@@ -215,8 +215,6 @@ def solve_imsrg2(
     Integrates the IMSRG flow equations from initial to final flow parameter
     values, returning the converged energy (and flow data for possible further analysis)
     """
-    if not isinstance(e0, torch.Tensor):
-        e0 = torch.tensor(e0, dtype=f.dtype, device=f.device)
 
     y = (e0, f, gamma)
 
@@ -224,10 +222,8 @@ def solve_imsrg2(
     dt = 0.01
 
     # do not recompile for variables
-    s_t = torch.tensor(s, device=occs.device)
-    dt_t = torch.tensor(dt, device=occs.device)
-    torch._dynamo.mark_dynamic(s_t, 0)
-    torch._dynamo.mark_dynamic(dt_t, 0)
+    s_t = jax.array(s, device=occs.device)
+    dt_t = jax.array(dt, device=occs.device)
 
     rhs_args = (occs, delta, eta_criterion)
     data_tracking = []
@@ -242,8 +238,8 @@ def solve_imsrg2(
         if s + dt > s_max:
             dt = s_max - s
 
-        s_t.fill_(s)
-        dt_t.fill_(dt)
+        s_t.at[:].set(s)
+        dt_t.at[:].set(dt)
         y_new, y_err, _ = dopri5_step(imsrg_rhs, s_t, dt_t, y, rhs_args)
 
         err_val = error_ratio(y_err, atol, rtol, y).item()
@@ -255,8 +251,8 @@ def solve_imsrg2(
 
             gen1 = generator.build_1b_arctan_generator(occs, y[1], delta)
             gen2 = generator.build_2b_arctan_generator(occs, y[1], y[2], delta)
-            n1 = torch.linalg.norm(gen1).item()
-            n2 = torch.linalg.norm(gen2).item()
+            n1 = jnp.linalg.norm(gen1)
+            n2 = jnp.linalg.norm(gen2)
 
             if track_data:
                 data_tracking.append((s, curr_e, n1, n2))
