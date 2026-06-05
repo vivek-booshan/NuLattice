@@ -8,23 +8,24 @@ __copyright__ = "(c) Matthias Heinz"
 __license__ = "BSD-3-Clause"
 __date__ = "2025-09-03"
 
-import torch
+import jax
+import jax.numpy as jnp
 
-def get_hole_spes(occs: torch.Tensor, f: torch.Tensor) -> torch.Tensor:
+def get_hole_spes(occs: jax.Array, f: jax.Array) -> jax.Array:
     """
     Extracts single-particle energies for hole states using PyTorch masking.
     """
-    return occs * torch.diag(f)
+    return occs * jnp.diag(f)
 
 
-def get_particle_spes(occs: torch.Tensor, f: torch.Tensor, delta: float = 0.0) -> torch.Tensor:
+def get_particle_spes(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Extracts single-particle energies for particle states using PyTorch masking.
     """
-    return (1 - occs) * (torch.diag(f) + delta)
+    return (1 - occs) * (jnp.diag(f) + delta)
 
 
-def build_1b_energy_difference(occs: torch.Tensor, f: torch.Tensor, delta: float = 0.0) -> torch.Tensor:
+def build_1b_energy_difference(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs one-body energy differences (eps_i - eps_a).
     Uses broadcasting to avoid O(N^2) loops.
@@ -41,7 +42,7 @@ def build_1b_energy_difference(occs: torch.Tensor, f: torch.Tensor, delta: float
     return f_hp - f_hp.T + 1e-20
 
 
-def build_2b_energy_difference(occs: torch.Tensor, f: torch.Tensor, delta: float = 0.0) -> torch.Tensor:
+def build_2b_energy_difference(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs two-body energy differences (eps_i + eps_j - eps_a - eps_b).
     Uses 4D broadcasting to avoid O(N^4) contractions.
@@ -60,7 +61,7 @@ def build_2b_energy_difference(occs: torch.Tensor, f: torch.Tensor, delta: float
     return gamma_hhpp - gamma_hhpp.permute(2, 3, 0, 1) + 1e-20
 
 
-def build_1b_arctan_generator(occs: torch.Tensor, f: torch.Tensor, delta: float = 0.0) -> torch.Tensor:
+def build_1b_arctan_generator(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs the 1-body arctan generator using boolean indexing.
     """
@@ -71,14 +72,14 @@ def build_1b_arctan_generator(occs: torch.Tensor, f: torch.Tensor, delta: float 
 
     hp_mask = (h[:, None] & p[None, :]) | (p[:, None] & h[None, :])
 
-    eta = torch.zeros_like(f)
+    eta = jnp.zeros_like(f)
     
-    eta[hp_mask] = 0.5 * torch.arctan(2 * f[hp_mask] / e_diff[hp_mask])
+    eta[hp_mask] = 0.5 * jnp.arctan(2 * f[hp_mask] / e_diff[hp_mask])
 
     return eta
 
 
-def build_2b_arctan_generator(occs: torch.Tensor, f: torch.Tensor, gamma: torch.Tensor, delta: float = 0.0) -> torch.Tensor:
+def build_2b_arctan_generator(occs: jax.Array, f: jax.Array, gamma: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs the 2-body arctan generator using boolean indexing.
     """
@@ -96,8 +97,8 @@ def build_2b_arctan_generator(occs: torch.Tensor, f: torch.Tensor, gamma: torch.
 
     mask = hhpp_mask | pphh_mask
 
-    eta = torch.zeros_like(gamma)
+    eta = jnp.zeros_like(gamma)
     
-    eta[mask] = 0.5 * torch.arctan(2 * gamma[mask] / e_diff[mask])
+    eta[mask] = 0.5 * jnp.arctan(2 * gamma[mask] / e_diff[mask])
 
     return eta
