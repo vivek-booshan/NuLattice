@@ -1,11 +1,11 @@
+from functools import partial
+from typing import Tuple, Callable
+
 import jax
 import jax.numpy as jnp
-from typing import Tuple, Callable, Iterable
+
 from . import generator
 from .commutator import evaluate_imsrg2_commutator
-
-# fuse the 9 kernels together
-# evaluate_imsrg2_commutator = torch.compile(commutator.evaluate_imsrg2_commutator)
 
 # --- DOPRI5 CONSTANTS (The Butcher Tableau) ---
 # Hardcoded for performance
@@ -38,18 +38,10 @@ E5 = -2187.0 / 6784.0 - -92097.0 / 339200.0
 E6 = 11.0 / 84.0 - 187.0 / 2100.0
 E7 = -1.0 / 40.0
 
-# NOTE(vivek): Ensure 'e' is a 0-dim Tensor (torch.tensor(0.0)), not a float, for consistency.
 State = Tuple[jax.Array, jax.Array, jax.Array]
 
 
-def tree_map(func: Callable, *trees: Iterable) -> Tuple:
-    """
-    Lightweight PyTorch equivalent of jax.tree_map for flat tuples.
-    Assumes all trees have the same structure.
-    """
-    return tuple(func(*args) for args in zip(*trees))
-
-
+@partial(jax.jit, static_argnames=("delta", "eta_criterion"))
 def imsrg_rhs(
     s: float | jax.Array,
     state: State,
@@ -82,17 +74,10 @@ def imsrg_rhs(
     total_norm = jnp.sqrt(norm_gen1**2 + norm_gen2**2)
 
     # Commutators [eta, H]
-    # Calculate these unconditionally to keep the computation graph static
     dh0, dh1, dh2 = evaluate_imsrg2_commutator(occs, gen1, gen2, f, gamma)
-
     is_converged = total_norm < eta_criterion
 
-    if not isinstance(dh0, jax.Array):
-        dh0 = jax.tensor(dh0, dtype=e.dtype, device=e.device)
-
-    final_dh0 = jnp.where(
-        is_converged, jnp.array(0.0, device=e.device, dtype=e.dtype), dh0
-    )
+    final_dh0 = jnp.where(is_converged, 0, dh0)
     final_dh1 = jnp.where(is_converged, jnp.zeros_like(f), dh1)
     final_dh2 = jnp.where(is_converged, jnp.zeros_like(gamma), dh2)
 
@@ -182,6 +167,7 @@ def dopri5_step(
     return y_next, y_err, k7
 
 
+@partial(jax.jit, static_argnames=("atol", "rtol"))
 def error_ratio(error_tree, atol=1e-6, rtol=1e-6, y=None):
     """
     Calculates the error ratio for adaptive stepping.
@@ -221,7 +207,6 @@ def solve_imsrg2(
     s = s_init
     dt = 0.01
 
-    # do not recompile for variables
     s_t = s
     dt_t = dt
 
