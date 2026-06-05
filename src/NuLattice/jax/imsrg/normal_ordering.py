@@ -11,23 +11,11 @@ __date__ = "2025-09-03"
 
 from NuLattice.utils._jax_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
 
-import numpy as np
+from functools import partial
+# import numpy as np
 from typing import Optional
 import jax
 import jax.numpy as jnp
-
-try:
-    from numba import njit
-except ImportError:
-
-    def njit(*args, **kwargs):
-        def decorator(f):
-            return f
-
-        if len(args) > 0 and callable(args[0]):
-            return args[0]
-        return decorator
-
 
 @jax.jit
 def create_occupations_nstates(n_states, ref_indices):
@@ -50,37 +38,42 @@ def create_occupations(basis, ref_indices):
     :param n_stat: Total number of single-particle states (int)
     :param ref_indices: Array of indices that are occupied (jnp.ndarray)
     """
-    matches = (basis[:, None, :] == ref_indices[None, :, :]).all(axis=2)
-    return matches.any(axis=1).astype(jnp.float64)
+    occs = jnp.zeros(shape=len(basis))
+    for idx in ref_indices:
+        i = basis.index(idx)
+        occs = occs.at[i].set(1.0)
+    return occs
 
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("dim", ))
 def _compute_op1_kernel(h1, dim, occs, e0_arr, f):
     for p in range(dim):
         for q in range(dim):
             val = h1[p, q]
-            f[p, q] += val
+            f = f.at[p, q].add(val)
             if p == q:
-                e0_arr[0] += occs[p] * val
+                e0_arr = e0_arr.at[0].add(occs[p] * val)
+    return e0_arr, f
 
 
-@jax.jit
 def _accumulate_2b_contributions(p, q, r, s, val, occs, e0_arr, f, gamma):
     """
     Helper to accumulate a single permuted 2-body element into normal ordered operators.
     """
     # 2-Body (Gamma) Contribution
-    gamma[p, q, r, s] += val
+    gamma = gamma.at[p, q, r, s].add(val)
 
     # 1-Body (Fock) Contribution: Contraction over q=s
-    if q == s:
-        term = occs[q] * val
-        f[p, r] += term
+    q_s_mask = (q == s)
+    term = jnp.where(q_s_mask, occs[p] * val, 0.0)
+    f.at[p, r].add(term)
 
-        # 0-Body (Energy) Contribution: Contraction over p=r
-        if p == r:
-            e0_arr[0] += 0.5 * occs[p] * term
+    p_r_mask = q_s_mask & (p == r)
+    e0_term = jnp.where(p_r_mask, 0.5 * occs[p] * term, 0.0)
+    e0_arr = e0_arr.at[0].add(jnp.sum(e0_term))
+
+    return e0_arr, f, gamma
 
 
 @jax.jit
@@ -89,80 +82,76 @@ def _compute_op2_kernel(indices, values, occs, e0_arr, f, gamma):
     Numba kernel to process 2-body interactions in SoA format.
     Applies 4 antisymmetrization permutations on-the-fly.
     """
-    n_elems = len(values)
-    for i in range(n_elems):
-        p, q, r, s = indices[i]
-        val = values[i]
+    p = indices[:, 0]
+    q = indices[:, 1]
+    r = indices[:, 2]
+    s = indices[:, 3]
 
-        # Apply antisymmetrization: <pq|rs>
-        _accumulate_2b_contributions(p, q, r, s, val, occs, e0_arr, f, gamma)
-        _accumulate_2b_contributions(q, p, r, s, -val, occs, e0_arr, f, gamma)
-        _accumulate_2b_contributions(p, q, s, r, -val, occs, e0_arr, f, gamma)
-        _accumulate_2b_contributions(q, p, s, r, val, occs, e0_arr, f, gamma)
+
+    # Apply antisymmetrization: <pq|rs>
+    e0_arr, f, gamma = _accumulate_2b_contributions(p, q, r, s, values, occs, e0_arr, f, gamma)
+    e0_arr, f, gamma = _accumulate_2b_contributions(q, p, r, s, -values, occs, e0_arr, f, gamma)
+    e0_arr, f, gamma = _accumulate_2b_contributions(p, q, s, r, -values, occs, e0_arr, f, gamma)
+    e0_arr, f, gamma = _accumulate_2b_contributions(q, p, s, r, values, occs, e0_arr, f, gamma)
+
+    return e0_arr, f, gamma
 
 
 @jax.jit
 def _compute_op3_kernel(indices, values, occs, e0_arr, f, gamma):
     """
-    Numba kernel to process 3-body interactions in SoA format.
-    Applies 36 antisymmetrization permutations on-the-fly and computes NO2B approximation.
+    Vectorizes over the data length and unrolls the 36 antisymmetrization
+    permutations using vectorized masking.
     """
-    n_elems = len(values)
+    perm_map = [
+        [0, 1, 2], [2, 0, 1], [1, 2, 0],  # Even (+1)
+        [1, 0, 2], [0, 2, 1], [2, 1, 0],  # Odd (-1)
+    ]
+    perm_signs = [1.0, 1.0, 1.0, -1.0, -1.0, -1.0]
 
-    # Pre-computed permutations for 3 indices (0,1,2)
-    # Rows: [p,q,r] indices, Sign
-    perm_map = jnp.array(
-        [
-            [0, 1, 2], [2, 0, 1], [1, 2, 0],  # Even (+1)
-            [1, 0, 2], [0, 2, 1], [2, 1, 0],  # Odd (-1)
-        ],
-        dtype=jnp.int8,
-    )
-    perm_signs = jnp.array([1.0, 1.0, 1.0, -1.0, -1.0, -1.0])
+    p_raw = indices[:, 0]
+    q_raw = indices[:, 1]
+    r_raw = indices[:, 2]
+    s_raw = indices[:, 3]
+    t_raw = indices[:, 4]
+    u_raw = indices[:, 5]
 
-    for i in range(n_elems):
-        # Extract raw indices and value
-        p_raw, q_raw, r_raw = indices[i, 0], indices[i, 1], indices[i, 2]
-        s_raw, t_raw, u_raw = indices[i, 3], indices[i, 4], indices[i, 5]
-        val_raw = values[i]
+    bra_raw = [p_raw, q_raw, r_raw]
+    ket_raw = [s_raw, t_raw, u_raw]
 
-        bra_raw = jnp.array([p_raw, q_raw, r_raw])
-        ket_raw = jnp.array([s_raw, t_raw, u_raw])
+    for bi in range(6):
+        p = bra_raw[perm_map[bi][0]]
+        q = bra_raw[perm_map[bi][1]]
+        r = bra_raw[perm_map[bi][2]]
+        sign_bra = perm_signs[bi]
 
-        # Iterate over 6 Bra permutations
-        for bi in range(6):
-            p = bra_raw[perm_map[bi, 0]]
-            q = bra_raw[perm_map[bi, 1]]
-            r = bra_raw[perm_map[bi, 2]]
-            sign_bra = perm_signs[bi]
+        for ki in range(6):
+            s = ket_raw[perm_map[ki][0]]
+            t = ket_raw[perm_map[ki][1]]
+            u = ket_raw[perm_map[ki][2]]
+            sign_ket = perm_signs[ki]
 
-            # Iterate over 6 Ket permutations
-            for ki in range(6):
-                s = ket_raw[perm_map[ki, 0]]
-                t = ket_raw[perm_map[ki, 1]]
-                u = ket_raw[perm_map[ki, 2]]
-                sign_ket = perm_signs[ki]
+            val = values * (sign_bra * sign_ket)
 
-                val = val_raw * sign_bra * sign_ket
 
-                # Normal Ordering Approximations
+            # Effective 2-Body
+            mask_gamma = (r == u)
+            gamma_increment = jnp.where(mask_gamma, val, 0.0)
+            gamma = gamma.at[p, q, s, t].add(gamma_increment)
 
-                # Check for contraction on the 3rd index (r == u)
-                # This contributes to the effective 2-body operator
-                if r == u:
-                    gamma[p, q, s, t] += val
+            # Effective 1-Body
+            mask_f = mask_gamma & (q == t)
+            term = 0.5 * occs[q] * occs[r] * val
+            f_increment = jnp.where(mask_f, term, 0.0)
+            f = f.at[p, s].add(f_increment)
 
-                    # Check for contraction on 2nd index (q == t)
-                    # This contributes to the effective 1-body operator
-                    if q == t:
-                        term = 0.5 * occs[q] * occs[r] * val
-                        f[p, s] += term
+            # Scalar Energy
+            mask_e0 = mask_f & (p == s)
+            e0_increment = jnp.where(mask_e0, (1.0 / 3.0) * occs[p] * term, 0.0)
+            
+            e0_arr = e0_arr.at[0].add(jnp.sum(e0_increment))
 
-                        # Check for contraction on 1st index (p == s)
-                        # This contributes to the scalar energy (E0)
-                        if p == s:
-                            # Factor: 1/6 total (1/3 * 1/2 from prev step)
-                            e0_arr[0] += (1.0 / 3.0) * occs[p] * term
+    return e0_arr, f, gamma
 
 
 def compute_normal_ordered_hamiltonian_no2b(
@@ -188,11 +177,11 @@ def compute_normal_ordered_hamiltonian_no2b(
     gamma = jnp.zeros((dim, dim, dim, dim), dtype=jnp.float64)
 
     h1 = op1.to_dense() if hasattr(op1, "to_dense") else op1
-    _compute_op1_kernel(h1, dim, occs, e0, f)
+    e0, f = _compute_op1_kernel(h1, dim, occs, e0, f)
 
-    _compute_op2_kernel(op2.indices, op2.values, occs, e0, f, gamma)
+    e0, f, gamma = _compute_op2_kernel(op2.indices, op2.values, occs, e0, f, gamma)
 
     if op3 is not None:
-        _compute_op3_kernel(op3.indices, op3.values, occs, e0, f, gamma)
+        e0, f, gamma = _compute_op3_kernel(op3.indices, op3.values, occs, e0, f, gamma)
 
     return e0[0], f, gamma
