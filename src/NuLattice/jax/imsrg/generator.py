@@ -8,6 +8,8 @@ __copyright__ = "(c) Matthias Heinz"
 __license__ = "BSD-3-Clause"
 __date__ = "2025-09-03"
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 
@@ -62,6 +64,7 @@ def build_2b_energy_difference(occs: jax.Array, f: jax.Array, delta: float = 0.0
     return gamma_hhpp - gamma_hhpp.transpose(2, 3, 0, 1) + 1e-20
 
 
+@partial(jax.jit, static_argnames=("delta", ))
 def build_1b_arctan_generator(occs: jax.Array, f: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs the 1-body arctan generator using boolean indexing.
@@ -73,13 +76,12 @@ def build_1b_arctan_generator(occs: jax.Array, f: jax.Array, delta: float = 0.0)
 
     hp_mask = (h[:, None] & p[None, :]) | (p[:, None] & h[None, :])
 
-    eta = jnp.zeros_like(f)
+    eta_fill = 0.5 * jnp.arctan(2 * f / e_diff)
     
-    eta = eta.at[hp_mask].set(0.5 * jnp.arctan(2 * f[hp_mask] / e_diff[hp_mask]))
-
-    return eta
+    return jnp.where(hp_mask, eta_fill, 0)
 
 
+@partial(jax.jit, static_argnames=("delta", ))
 def build_2b_arctan_generator(occs: jax.Array, f: jax.Array, gamma: jax.Array, delta: float = 0.0) -> jax.Array:
     """
     Constructs the 2-body arctan generator using boolean indexing.
@@ -98,8 +100,6 @@ def build_2b_arctan_generator(occs: jax.Array, f: jax.Array, gamma: jax.Array, d
 
     mask = hhpp_mask | pphh_mask
 
-    eta = jnp.zeros_like(gamma)
-    
-    eta = eta.at[mask].set(0.5 * jnp.arctan(2 * gamma[mask] / e_diff[mask]))
+    eta_fill = 0.5 * jnp.arctan(2 * gamma / e_diff)
 
-    return eta
+    return jnp.where(mask, eta_fill, 0)
