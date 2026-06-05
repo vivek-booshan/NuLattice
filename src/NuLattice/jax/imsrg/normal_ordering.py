@@ -9,10 +9,12 @@ __copyright__ = "(c) Matthias Heinz"
 __license__ = "BSD-3-Clause"
 __date__ = "2025-09-03"
 
-from NuLattice._types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
+from NuLattice.utils._jax_types import OneBodyOperator, TwoBodyOperator, ThreeBodyOperator
 
 import numpy as np
 from typing import Optional
+import jax
+import jax.numpy as jnp
 
 try:
     from numba import njit
@@ -27,15 +29,15 @@ except ImportError:
         return decorator
 
 
-@njit
+@jax.jit
 def create_occupations_nstates(n_states, ref_indices):
     """
     Creates occupation array from a list of occupied state indices.
 
     :param n_stat: Total number of single-particle states (int)
-    :param ref_indices: Array of indices that are occupied (np.ndarray)
+    :param ref_indices: Array of indices that are occupied (jnp.ndarray)
     """
-    occs = np.zeros(n_states, dtype=np.float64)
+    occs = jnp.zeros(n_states, dtype=jnp.float64)
     for idx in ref_indices:
         occs[idx] = 1.0
     return occs
@@ -46,14 +48,14 @@ def create_occupations(basis, ref_indices):
     Creates occupation array from a list of occupied state indices.
 
     :param n_stat: Total number of single-particle states (int)
-    :param ref_indices: Array of indices that are occupied (np.ndarray)
+    :param ref_indices: Array of indices that are occupied (jnp.ndarray)
     """
     matches = (basis[:, None, :] == ref_indices[None, :, :]).all(axis=2)
-    return matches.any(axis=1).astype(np.float64)
+    return matches.any(axis=1).astype(jnp.float64)
 
 
 
-@njit
+@jax.jit
 def _compute_op1_kernel(h1, dim, occs, e0_arr, f):
     for p in range(dim):
         for q in range(dim):
@@ -63,7 +65,7 @@ def _compute_op1_kernel(h1, dim, occs, e0_arr, f):
                 e0_arr[0] += occs[p] * val
 
 
-@njit
+@jax.jit
 def _accumulate_2b_contributions(p, q, r, s, val, occs, e0_arr, f, gamma):
     """
     Helper to accumulate a single permuted 2-body element into normal ordered operators.
@@ -81,7 +83,7 @@ def _accumulate_2b_contributions(p, q, r, s, val, occs, e0_arr, f, gamma):
             e0_arr[0] += 0.5 * occs[p] * term
 
 
-@njit
+@jax.jit
 def _compute_op2_kernel(indices, values, occs, e0_arr, f, gamma):
     """
     Numba kernel to process 2-body interactions in SoA format.
@@ -99,7 +101,7 @@ def _compute_op2_kernel(indices, values, occs, e0_arr, f, gamma):
         _accumulate_2b_contributions(q, p, s, r, val, occs, e0_arr, f, gamma)
 
 
-@njit
+@jax.jit
 def _compute_op3_kernel(indices, values, occs, e0_arr, f, gamma):
     """
     Numba kernel to process 3-body interactions in SoA format.
@@ -109,14 +111,14 @@ def _compute_op3_kernel(indices, values, occs, e0_arr, f, gamma):
 
     # Pre-computed permutations for 3 indices (0,1,2)
     # Rows: [p,q,r] indices, Sign
-    perm_map = np.array(
+    perm_map = jnp.array(
         [
             [0, 1, 2], [2, 0, 1], [1, 2, 0],  # Even (+1)
             [1, 0, 2], [0, 2, 1], [2, 1, 0],  # Odd (-1)
         ],
-        dtype=np.int8,
+        dtype=jnp.int8,
     )
-    perm_signs = np.array([1.0, 1.0, 1.0, -1.0, -1.0, -1.0])
+    perm_signs = jnp.array([1.0, 1.0, 1.0, -1.0, -1.0, -1.0])
 
     for i in range(n_elems):
         # Extract raw indices and value
@@ -124,8 +126,8 @@ def _compute_op3_kernel(indices, values, occs, e0_arr, f, gamma):
         s_raw, t_raw, u_raw = indices[i, 3], indices[i, 4], indices[i, 5]
         val_raw = values[i]
 
-        bra_raw = np.array([p_raw, q_raw, r_raw])
-        ket_raw = np.array([s_raw, t_raw, u_raw])
+        bra_raw = jnp.array([p_raw, q_raw, r_raw])
+        ket_raw = jnp.array([s_raw, t_raw, u_raw])
 
         # Iterate over 6 Bra permutations
         for bi in range(6):
@@ -164,8 +166,8 @@ def _compute_op3_kernel(indices, values, occs, e0_arr, f, gamma):
 
 
 def compute_normal_ordered_hamiltonian_no2b(
-    occs: np.ndarray,
-    op1: OneBodyOperator | np.ndarray,
+    occs: jnp.ndarray,
+    op1: OneBodyOperator | jnp.ndarray,
     op2: TwoBodyOperator,
     op3: Optional[ThreeBodyOperator] = None,
 ):
@@ -181,9 +183,9 @@ def compute_normal_ordered_hamiltonian_no2b(
     :rtype:         float, numpy array, numpy array
     """
     dim = len(occs)
-    e0 = np.zeros(1, dtype=np.float64)
-    f = np.zeros((dim, dim), dtype=np.float64)
-    gamma = np.zeros((dim, dim, dim, dim), dtype=np.float64)
+    e0 = jnp.zeros(1, dtype=jnp.float64)
+    f = jnp.zeros((dim, dim), dtype=jnp.float64)
+    gamma = jnp.zeros((dim, dim, dim, dim), dtype=jnp.float64)
 
     h1 = op1.to_dense() if hasattr(op1, "to_dense") else op1
     _compute_op1_kernel(h1, dim, occs, e0, f)
