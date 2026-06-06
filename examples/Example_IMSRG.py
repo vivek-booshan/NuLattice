@@ -24,7 +24,7 @@ def parse():
     
     parser.add_argument("--element", type=str, default="HE3", 
                         help="Reference state key (e.g., HE3, HE4, C12)")
-
+    parser.add_argument("--backend", type=str, default="cpu")
     args = parser.parse_args()
     return args
 
@@ -37,7 +37,7 @@ def main():
         print(f"Error: Reference state for '{args.element}' not found in constants.")
         sys.exit(1)
 
-    solver = IMSRGSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE)
+    solver = IMSRGSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, args.backend)
     e_imsrg, integration_data = solver.solve(args.s_max, args.eta_crit)
 
     print("-" * 30)
