@@ -260,21 +260,36 @@ class HFSolver(BaseSolver):
 class IMSRGSolver(BaseSolver):
     def solve(self, s_max=40, eta_crit=1e-3):
         if self.backend == "cpu":
-            import NuLattice.IMSRG as imsrg
+            import NuLattice.IMSRG.normal_ordering as normal_ordering
+            import NuLattice.IMSRG.solver as ode_solver
         elif self.backend == "torch":
-            import NuLattice.soa.imsrg as imsrg
+            import NuLattice.soa.imsrg.normal_ordering as normal_ordering
+            import NuLattice.soa.imsrg.solver as ode_solver
         elif self.backend == "jax":
-            raise NotImplementedError("Not yet implemented")
-            import NuLattice.jax.imsrg as imsrg
+            import NuLattice.jax.imsrg.normal_ordering as normal_ordering
+            import NuLattice.jax.imsrg.solver as ode_solver
+            # raise NotImplementedError("Not yet implemented")
         else:
             raise ValueError("Unknown backend. Select <cpu|torch|jax>")
 
-        occs = imsrg.normal_ordering.create_occupations(self.basis, self.state)
-        e0, f, gamma = imsrg.normal_ordering.compute_normal_ordered_hamiltonian_no2b(
+        occs = normal_ordering.create_occupations(self.basis, self.state)
+        e0, f, gamma = normal_ordering.compute_normal_ordered_hamiltonian_no2b(
             occs, self.op1, self.op2, self.op3
         )
+        if self.backend == "torch":
+            import torch
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            occs = torch.tensor(occs, device=device)
+            e0 = torch.tensor(e0, device=device)
+            f = torch.tensor(f, device=device)
+            gamma = torch.tensor(gamma, device=device)
 
-        e_imsrg, integration_data = imsrg.ode_solver.solve_imsrg2(
-            occs, e0, f, gamma, s_max=s_max, eta_criterion=eta_crit
+        e_imsrg, integration_data = ode_solver.solve_imsrg2(
+            occs,
+            e0,
+            f,
+            gamma,
+            s_max=s_max,
+            eta_criterion=eta_crit
         )
         return e_imsrg, integration_data
