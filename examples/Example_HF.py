@@ -21,8 +21,6 @@ def parse():
     parser.add_argument("--mix", type=float, default=0.7, help="Mixing parameter for density iterations")
     parser.add_argument("--max_iter", type=int, default=100, help="Maximum HF iterations")
     parser.add_argument("--quiet", action="store_false", dest="verbose", default=True, help="Suppress iteration output")
-    parser.add_argument("--span_multiplier", type=float, default=1, help="k = span_multiplier * num_particles")
-    parser.add_argument("--use_davidson", action="store_true", default=False, help="use davidson solver")
 
     parser.add_argument("--element", type=str, default="O16", 
                         help="Reference state key (e.g., O16, C12, HE4)")
@@ -44,13 +42,12 @@ def main():
     print(f"Lattice L = {args.L}")
 
     solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
-    method = "davidson" if args.use_davidson else None
     # start = time.perf_counter()
-    # erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, verbose=False, chef=None, span_multiplier=args.span_multiplier, method=method)
+    # erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, verbose=False, chef=None)
     # end = time.perf_counter()
     # print("cold start:", end - start)
     start = time.time()
-    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=None, span_multiplier=args.span_multiplier, method=method)
+    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=None)
     end = time.time()
     try:
         stats = jax.local_devices()[0].memory_stats()

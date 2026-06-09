@@ -119,8 +119,8 @@ def contract_3nf_fused(indices, values, dens):
     
     return res
 
-@partial(jax.jit, static_argnames=("npart", "eigh_solver"))
-def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs, eigh_solver):
+@partial(jax.jit, static_argnames=("npart",))
+def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     gamma = contract_2nf_fused(v2_idx, v2_val, dens)
     omega = contract_3nf_fused(w3_idx, w3_val, dens)
 
@@ -135,7 +135,7 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs, ei
     e_omega = jnp.sum(omega * dens)
     energy = e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega
 
-    _, vecs = eigh_solver(hf_ham, npart, prev_vecs)
+    _, vecs = davidson_eigh(hf_ham, npart, prev_vecs)
     occ = vecs[:, :npart]
     new_dens = occ @ occ.T
 
@@ -145,8 +145,7 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs, ei
     return updated_dens, energy, diff_dens, vecs
 
 # TODO: split func and auto-diff
-def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef: Chef =None, span_multiplier: float = 1, method=None):
-    assert span_multiplier >= 1, "span_multiplier must be greater than 1"
+def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef: Chef = None):
     if chef is not None:
         assert chef.num_nodes == 1 or chef.num_gpus == 1, "HF expects 1D mesh, ensure chef.num_nodes or chef.num_gpus is 1"
         h1_dense = chef.prepare(op1.to_dense(), rank=0)
@@ -156,7 +155,6 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
         w3_idx = chef.prepare(op3.indices)
         w3_val = chef.prepare(op3.values)
     else:
-        # Avoid jnp.asarray if they are already jax arrays, just in case
         h1_dense = jnp.array(op1.to_dense())
         v2_idx, v2_val = jnp.array(op2.indices), jnp.array(op2.values)
         w3_idx, w3_val = jnp.array(op3.indices), jnp.array(op3.values)
@@ -164,14 +162,7 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
 
     prev_energy = 0.0
     converged = False
-    npart = int(span_multiplier * jnp.trace(_dens).round())
-
-    if method == "davidson":
-        eigh_solver = davidson_eigh
-    else:
-        def default_eigh(x, npart, vecs):
-            return jnp.linalg.eigh(x)
-        eigh_solver = default_eigh
+    npart = int(jnp.trace(_dens).round())
 
     # NOTE(vivek): _dens already diagonal but diag(dens) returns as 1d vector
     top_indices = jnp.argsort(jnp.diag(_dens))[-npart:]
@@ -179,10 +170,9 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
 
     for i in range(max_iter): # maybe switch to fori? 
         _dens, energy, diff_dens, vecs = _hf_step(
-            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, vecs, eigh_solver
+            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, vecs
         )
         
-        # Block only on the scalar to prevent locking the whole GPU graph
         dE = jnp.abs(energy - prev_energy)
         if verbose:
             # convert to jax debug logging
