@@ -1,6 +1,6 @@
 import argparse
 
-from NuLattice.utils.constants import ReferenceState
+from NuLattice.utils.constants import ReferenceState as RS
 from NuLattice.solver import CCMSolver
 
 def parse():
@@ -39,7 +39,7 @@ def main():
         import jax
         jax.config.update("jax_enable_x64", True)
 
-    ref_state = getattr(ReferenceState, f"{args.reference.upper()}_GS")
+    ref_state = getattr(RS, f"{args.reference.upper()}_GS")
     solver = CCMSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
         
     print(f"Lattice: {solver.L}^3 | Spacing: {solver.a_lat} fm")
