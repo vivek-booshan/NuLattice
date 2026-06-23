@@ -23,7 +23,7 @@ def parse():
     parser.add_argument("--mix", type=float, default=0.7, help="Mixing parameter for density iterations")
     parser.add_argument("--max_iter", type=int, default=100, help="Maximum HF iterations")
     parser.add_argument("--quiet", action="store_false", dest="verbose", default=True, help="Suppress iteration output")
-    parser.add_argument("--element", type=str, default="O16", 
+    parser.add_argument("--reference", type=str, default="O16", 
                         help="Reference state key (e.g., O16, C12, HE4)")
     parser.add_argument("--backend", type=str, default="cpu", help="backend")
     parser.add_argument("--shard", action="store_true", default=False, help="Enable JAX sharding")
@@ -35,7 +35,7 @@ def main():
     args = parse()
 
     try:
-        attr_name = f"{args.element.upper()}_GS"
+        attr_name = f"{args.reference.upper()}_GS"
         ref_state = getattr(ReferenceState, attr_name)
     except AttributeError:
         print(f"Error: Reference state for '{args.element}' not found.")
