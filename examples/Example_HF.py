@@ -2,7 +2,7 @@ import argparse
 import sys
 import time
 import tracemalloc
-import jax
+
 
 
 from NuLattice.solver import HFSolver
@@ -75,6 +75,7 @@ def main():
         peak_mb = peak / 1e6
     elif args.backend == "jax":
         try:
+            import jax
             stats = jax.local_devices()[0].memory_stats()
             peak_mb = stats.get("peak_bytes_in_use", 0) / 1e6
         except Exception as e:
