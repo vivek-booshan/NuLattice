@@ -2,6 +2,7 @@ import argparse
 
 
 import NuLattice.references as ref
+from NuLattice.utils.constants import ReferenceState
 from NuLattice.solver import CCMSolver
 
 def parse():
@@ -9,6 +10,7 @@ def parse():
         description="Run a NuLattice CCM calculation with custom parameters."
     )
 
+    parser.add_argument("--reference", type=str, default="O16",  help="Reference state (HE4, ...)")
     parser.add_argument("--L", type=int, default=4, help="Lattice size L (L*L*L)")
     parser.add_argument("--a_lat", type=float, default=2.0, help="Lattice spacing in fm")
 
@@ -39,7 +41,7 @@ def main():
         import jax
         jax.config.update("jax_enable_x64", True)
 
-    ref_state = ref.ref_16O_gs
+    ref_state = getattr(ReferenceState, f"{args.reference.upper()}_GS")
     solver = CCMSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
         
     print(f"Lattice: {solver.L}^3 | Spacing: {solver.a_lat} fm")
