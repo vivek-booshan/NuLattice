@@ -143,7 +143,7 @@ class CCMSolver(BaseSolver):
         chef=None,
     ):
         if self.backend == "cpu":
-            from NuLattice.CCM.coupled_cluster import get_norm_ordered_ham, ccsd_solver
+            from NuLattice.cpu.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
         elif self.backend == "torch":
             from NuLattice.soa.ccm.coupled_cluster import (
                 get_norm_ordered_ham,
@@ -219,7 +219,7 @@ class HFSolver(BaseSolver):
         chef=None,
     ):
         if self.backend == "cpu":
-            import NuLattice.HF.hartree_fock as hf
+            import NuLattice.cpu.hf.hartree_fock as hf
         elif self.backend == "torch":
             import NuLattice.soa.hf.hartree_fock as hf
         elif self.backend == "jax":
@@ -262,7 +262,7 @@ class HFSolver(BaseSolver):
 class IMSRGSolver(BaseSolver):
     def solve(self, s_max=40, eta_crit=1e-3):
         if self.backend == "cpu":
-            import NuLattice.IMSRG as imsrg
+            import NuLattice.cpu.imsrg as imsrg
         elif self.backend == "torch":
             import NuLattice.soa.imsrg as imsrg
         elif self.backend == "jax":
