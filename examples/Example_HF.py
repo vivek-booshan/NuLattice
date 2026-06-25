@@ -3,8 +3,6 @@ import sys
 import time
 import tracemalloc
 
-
-
 from NuLattice.solver import HFSolver
 from NuLattice.constants import ReferenceState
 from NuLattice.utils._jax_types import Chef
@@ -43,6 +41,7 @@ def main():
 
     chef = None
     if args.shard:
+        assert args.backend == "jax", "backend must be jax"
         import jax
         jax.distributed.initialize()
         
@@ -65,7 +64,7 @@ def main():
         tracemalloc.start()
 
     start = time.perf_counter()
-    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=None)
+    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=chef)
     end = time.perf_counter()
     print("warm start:", end - start)
 
