@@ -6,16 +6,14 @@ __license__   = "BSD-3-Clause"
 __date__      = "2025-09-02"
 
 
-import sys, pathlib
-sys.path.append(str(pathlib.Path(__file__).parent))
-sys.path.append(str(pathlib.Path(__file__).parent / ".."))
+import pathlib
 
 import numpy as np
 from opt_einsum import contract
 import scipy.sparse as sparse
 from scipy.sparse.linalg import eigsh as arpack_eigsh
-from NuLattice.FCI.few_body_diagonalization import fill_1b_op_in_2b_basis, fill_2b_op_in_2b_basis
-from NuLattice.CCM.ccDgrams import pAB, pIJ
+from NuLattice.cpu.fci.few_body_diagonalization import fill_1b_op_in_2b_basis, fill_2b_op_in_2b_basis
+from NuLattice.cpu.ccm.ccDgrams import pAB, pIJ
 
 ## exact diagonalization starts here for two-body problem
 # read interaction

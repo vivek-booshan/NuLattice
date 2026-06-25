@@ -1,8 +1,6 @@
-import sys, pathlib
-sys.path.append(str(pathlib.Path(__file__).parent))
-sys.path.append(str(pathlib.Path(__file__).parent / ".."))
+import pathlib
 import numpy as np
-import NuLattice.HF.hartree_fock as hf
+import NuLattice.cpu.hf.hartree_fock as hf
 
 ## HF check
 

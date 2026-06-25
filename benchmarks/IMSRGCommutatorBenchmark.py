@@ -8,13 +8,9 @@ __copyright__ = "(c) Matthias Heinz"
 __license__ = "BSD-3-Clause"
 __date__ = "2025-09-03"
 
-import sys, pathlib
-sys.path.append(str(pathlib.Path(__file__).parent))
-sys.path.append(str(pathlib.Path(__file__).parent / ".."))
-
 import numpy as np
 
-from NuLattice.IMSRG import commutators
+from NuLattice.cpu.imsrg import commutators
 from data.read_file import read_file, read_file_basis_occs
 
 

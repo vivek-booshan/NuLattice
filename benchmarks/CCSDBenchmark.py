@@ -1,7 +1,5 @@
-import sys, pathlib
-sys.path.append(str(pathlib.Path(__file__).parent))
-sys.path.append(str(pathlib.Path(__file__).parent / ".."))
-import NuLattice.CCM.coupled_cluster as ccm
+import pathlib
+import NuLattice.cpu.ccm.coupled_cluster as ccm
 import numpy as np
 
 this_directory = pathlib.Path(__file__).parent
