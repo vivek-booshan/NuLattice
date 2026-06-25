@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from NuLattice.constants import ReferenceState
+from NuLattice.utils import ReferenceState
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,8 +130,23 @@ class BaseSolver:
 
 
 class CCMSolver(BaseSolver):
+    def normal_order(self, use_ham=True, sparse=True, NO2B=True, str_3NF=0.0):
+        if self.backend == "cpu":
+            import NuLattice.cpu.ccm.coupled_cluster as cc
+            if use_ham:
+                return cc.get_norm_ordered_ham(self.L, self.state, self.op1, self.op2, self.op3, sparse, NO2B)
+            return cc.get_norm_ord_int(self.L, self.state, self.coupling.vT1, self.coupling.vS1, str_3NF, sparse)
+        else:
+            import NuLattice.jax.ccm as cc
+            if use_ham:
+                return cc.get_norm_ordered_ham(self.L, self.state, self.op1, self.op2, self.op3, NO2B)
+            return cc.get_norm_ordered_int(self.L, self.state, self.coupling.vT1, self.coupling.vS1, self.coupling.cE)
+                
     def solve(
         self,
+        Eref,
+        focks, # fpp fph fhh
+        contacts, # vpppp vppph vpphh vphph vphhh vhhhh
         mixing=0.5,
         eps=1e-8,
         maxSteps=100,
@@ -143,41 +158,14 @@ class CCMSolver(BaseSolver):
         chef=None,
     ):
         if self.backend == "cpu":
-            from NuLattice.cpu.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
-        elif self.backend == "jax":
-            from NuLattice.jax.ccm import (
-                get_norm_ordered_ham,
-                ccsd_solver,
-            )
+            from NuLattice.cpu.ccm.coupled_cluster import ccsd_solver
         else:
-            raise ValueError("Unknown backend. Select <cpu|jax>")
+            from NuLattice.jax.ccm import ccsd_solver
 
         if self.backend == "jax":
-            if not sparse:
-                raise ValueError("Jax backend is sparse only")
-            refEn, fock, v2_no = get_norm_ordered_ham(
-                self.L,
-                self.state,
-                self.op1,
-                self.op2,
-                self.op3,
-                NO2B=NO2B,
-            )
-        else:
-            refEn, fock, v2_no = get_norm_ordered_ham(
-                self.L,
-                self.state,
-                self.op1,
-                self.op2,
-                self.op3,
-                NO2B=NO2B,
-                sparse=sparse,
-            )
-
-        if self.backend == "jax":
-            corrEn, t1, t2 = ccsd_solver(
-                fock,
-                v2_no,
+            Ecorr, t1, t2 = ccsd_solver(
+                focks,
+                contacts,
                 eps=eps,
                 maxSteps=maxSteps,
                 max_diis=max_diis,
@@ -188,9 +176,9 @@ class CCMSolver(BaseSolver):
                 chef=chef,
             )
         else:
-            corrEn, t1, t2 = ccsd_solver(
-                fock,
-                v2_no,
+            Ecorr, t1, t2 = ccsd_solver(
+                focks,
+                contacts,
                 eps=eps,
                 maxSteps=maxSteps,
                 max_diis=max_diis,
@@ -200,7 +188,7 @@ class CCMSolver(BaseSolver):
                 verbose=verbose,
                 ccs=False,
             )
-        return refEn, corrEn, t1, t2
+        return Eref, Ecorr, t1, t2
 
 
 class HFSolver(BaseSolver):
@@ -214,10 +202,8 @@ class HFSolver(BaseSolver):
     ):
         if self.backend == "cpu":
             import NuLattice.cpu.hf.hartree_fock as hf
-        elif self.backend == "jax":
-            import NuLattice.jax.hf.hartree_fock as hf
         else:
-            raise ValueError("Unknown backend. Select <cpu|jax>")
+            import NuLattice.jax.hf.hartree_fock as hf
 
         nstat = len(self.basis)
         hole = ReferenceState.holes(self.state, self.basis)
@@ -255,11 +241,8 @@ class IMSRGSolver(BaseSolver):
     def solve(self, s_max=40, eta_crit=1e-3):
         if self.backend == "cpu":
             import NuLattice.cpu.imsrg as imsrg
-        elif self.backend == "jax":
-            raise NotImplementedError("Not yet implemented")
-            import NuLattice.jax.imsrg as imsrg
         else:
-            raise ValueError("Unknown backend. Select <cpu|jax>")
+            raise NotImplementedError("jax backend not yet implemented")
 
         occs = imsrg.normal_ordering.create_occupations(self.basis, self.state)
         e0, f, gamma = imsrg.normal_ordering.compute_normal_ordered_hamiltonian_no2b(

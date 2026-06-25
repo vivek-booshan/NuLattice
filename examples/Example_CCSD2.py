@@ -1,7 +1,5 @@
 import argparse
 
-
-import NuLattice.references as ref
 from NuLattice.utils.constants import ReferenceState
 from NuLattice.solver import CCMSolver
 
@@ -48,7 +46,9 @@ def main():
     print(f"Number of single-particle states = {len(solver.basis)}")
     print(f"Number of lattice sites = {len(solver.lattice)}")
 
+    refEn, focks, contacts = solver.normal_order()
     refEn, corrEn, t1, t2 = solver.solve(
+        refEn, focks, contacts,
         mixing=args.mixing,
         eps=args.eps,
         maxSteps=args.maxSteps,
