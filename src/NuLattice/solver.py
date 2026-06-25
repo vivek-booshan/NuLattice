@@ -78,11 +78,11 @@ class BaseSolver:
         self.state = state
 
         if backend == "cpu":
-            import NuLattice.lattice as lat
-        if backend == "torch":
-            import NuLattice.soa.lattice as lat
-        if backend == "jax":
+            import NuLattice.cpu.lattice as lat
+        elif backend == "jax":
             import NuLattice.jax.lattice as lat
+        else:
+            raise ValueError("Unknown backend: <cpu|jax>")
 
         self.coupling = Coupling(vT1, vS1, cE)
 
@@ -144,18 +144,13 @@ class CCMSolver(BaseSolver):
     ):
         if self.backend == "cpu":
             from NuLattice.cpu.ccm.coupled_cluster import get_norm_ordered_ham, ccsd_solver
-        elif self.backend == "torch":
-            from NuLattice.soa.ccm.coupled_cluster import (
-                get_norm_ordered_ham,
-                ccsd_solver,
-            )
         elif self.backend == "jax":
             from NuLattice.jax.ccm import (
                 get_norm_ordered_ham,
                 ccsd_solver,
             )
         else:
-            raise ValueError("Unknown backend. Select <cpu|torch|jax>")
+            raise ValueError("Unknown backend. Select <cpu|jax>")
 
         if self.backend == "jax":
             if not sparse:
@@ -178,7 +173,6 @@ class CCMSolver(BaseSolver):
                 NO2B=NO2B,
                 sparse=sparse,
             )
-
 
         if self.backend == "jax":
             corrEn, t1, t2 = ccsd_solver(
@@ -220,12 +214,10 @@ class HFSolver(BaseSolver):
     ):
         if self.backend == "cpu":
             import NuLattice.cpu.hf.hartree_fock as hf
-        elif self.backend == "torch":
-            import NuLattice.soa.hf.hartree_fock as hf
         elif self.backend == "jax":
             import NuLattice.jax.hf.hartree_fock as hf
         else:
-            raise ValueError("Unknown backend. Select <cpu|torch|jax>")
+            raise ValueError("Unknown backend. Select <cpu|jax>")
 
         nstat = len(self.basis)
         hole = ReferenceState.holes(self.state, self.basis)
@@ -263,13 +255,11 @@ class IMSRGSolver(BaseSolver):
     def solve(self, s_max=40, eta_crit=1e-3):
         if self.backend == "cpu":
             import NuLattice.cpu.imsrg as imsrg
-        elif self.backend == "torch":
-            import NuLattice.soa.imsrg as imsrg
         elif self.backend == "jax":
             raise NotImplementedError("Not yet implemented")
             import NuLattice.jax.imsrg as imsrg
         else:
-            raise ValueError("Unknown backend. Select <cpu|torch|jax>")
+            raise ValueError("Unknown backend. Select <cpu|jax>")
 
         occs = imsrg.normal_ordering.create_occupations(self.basis, self.state)
         e0, f, gamma = imsrg.normal_ordering.compute_normal_ordered_hamiltonian_no2b(

@@ -1,6 +1,5 @@
 from typing import TypeAlias, List, Tuple
 import numpy as np
-import torch
 
 LatticeState: TypeAlias = List[int]
 """
@@ -50,8 +49,8 @@ class Operator:
 
     def __init__(
         self,
-        indices: np.ndarray | torch.Tensor,
-        values: np.ndarray | torch.Tensor,
+        indices: np.ndarray,
+        values: np.ndarray,
         nstat: int,
     ):
         """
@@ -62,31 +61,15 @@ class Operator:
         """
         self.nstat = nstat
 
-        # Detect backend (Torch vs NumPy)
-        self.is_torch = isinstance(indices, torch.Tensor) or isinstance(
-            values, torch.Tensor
-        )
-
-        if self.is_torch:
-            # Handle Torch initialization
-            self.indices = indices.to(dtype=torch.int64).contiguous()
-            self.values = values.contiguous()
-            self.device = self.values.device
-
-            if self.indices.ndim == 1:
-                self.indices = self.indices.unsqueeze(1)
+        self.indices = np.ascontiguousarray(indices, dtype=np.int64)
+        if np.iscomplexobj(values):
+            self.values = np.ascontiguousarray(values, dtype=np.complex128)
         else:
-            # Handle NumPy initialization
-            self.indices = np.ascontiguousarray(indices, dtype=np.int64)
-            if np.iscomplexobj(values):
-                self.values = np.ascontiguousarray(values, dtype=np.complex128)
-            else:
-                self.values = np.ascontiguousarray(values, dtype=np.float64)
+            self.values = np.ascontiguousarray(values, dtype=np.float64)
 
-            if self.indices.ndim == 1:
-                self.indices = self.indices.reshape(-1, 1)
+        if self.indices.ndim == 1:
+            self.indices = self.indices.reshape(-1, 1)
 
-        # Common Validation
         if self.values.ndim != 1:
             raise ValueError(f"Values must be 1D, got shape {self.values.shape}")
         if len(self.indices) != len(self.values):
@@ -96,28 +79,6 @@ class Operator:
 
     def __len__(self):
         return len(self.values)
-
-    def to_torch(self, device=None):
-        """Converts operator to PyTorch backend."""
-        if self.is_torch:
-            return (
-                self
-                if device is None
-                else self.__class__(
-                    self.indices.to(device), self.values.to(device), self.nstat
-                )
-            )
-        return self.__class__(
-            torch.from_numpy(self.indices), torch.from_numpy(self.values), self.nstat
-        ).to_torch(device)
-
-    def to_numpy(self):
-        """Converts operator to NumPy backend."""
-        if not self.is_torch:
-            return self
-        return self.__class__(
-            self.indices.cpu().numpy(), self.values.cpu().numpy(), self.nstat
-        )
 
     def to_list(self):
         """
@@ -141,12 +102,6 @@ class Operator:
         """Operator from a legacy list of lists [[p, q, ..., val], ...]"""
         if not operator_list:
             rank = cls._get_expected_rank()
-            if use_torch:
-                return cls(
-                    torch.empty((0, rank), dtype=torch.long, device=device),
-                    torch.empty((0,), device=device),
-                    nstat,
-                )
             return cls(
                 np.empty((0, rank), dtype=np.int64),
                 np.array([], dtype=np.float64),
@@ -157,8 +112,7 @@ class Operator:
         indices = np.round(data[:, :-1]).astype(np.int64)
         values = data[:, -1]
 
-        obj = cls(indices, values, nstat)
-        return obj.to_torch(device) if use_torch else obj
+        return cls(indices, values, nstat)
 
     @classmethod
     def _get_expected_rank(cls):
@@ -183,20 +137,10 @@ class OneBodyOperator(Operator):
     def to_dense(self, n_states: int = None):
         """Returns N x N dense matrix representation. If n_states not provided, defaults to self.n_states"""
         n = n_states or self.nstat
-        if self.is_torch:
-            mat = torch.zeros((n, n), dtype=self.values.dtype, device=self.device)
-            if len(self) > 0:
-                mat.index_put_(
-                    (self.indices[:, 0], self.indices[:, 1]),
-                    self.values,
-                    accumulate=True,
-                )
-            return mat
-        else:
-            mat = np.zeros((n, n), dtype=self.values.dtype)
-            if len(self) > 0:
-                np.add.at(mat, (self.indices[:, 0], self.indices[:, 1]), self.values)
-            return mat
+        mat = np.zeros((n, n), dtype=self.values.dtype)
+        if len(self) > 0:
+            np.add.at(mat, (self.indices[:, 0], self.indices[:, 1]), self.values)
+        return mat
 
 
 class TwoBodyOperator(Operator):
@@ -219,30 +163,17 @@ class TwoBodyOperator(Operator):
         n = n_states or self.nstat
         shape = (n, n, n, n)
 
-        if self.is_torch:
-            mat = torch.zeros(shape, dtype=self.values.dtype, device=self.device)
-            if len(self) > 0:
-                # Project (N, 4) indices into coordinate tuples for index_put_
-                idx_tuple = (
-                    self.indices[:, 0],
-                    self.indices[:, 1],
-                    self.indices[:, 2],
-                    self.indices[:, 3],
-                )
-                mat.index_put_(idx_tuple, self.values, accumulate=True)
-            return mat
-        else:
-            mat = np.zeros(shape, dtype=self.values.dtype)
-            if len(self) > 0:
-                # Use np.add.at for unbuffered accumulation (handles duplicate indices)
-                idx_tuple = (
-                    self.indices[:, 0],
-                    self.indices[:, 1],
-                    self.indices[:, 2],
-                    self.indices[:, 3],
-                )
-                np.add.at(mat, idx_tuple, self.values)
-            return mat
+        mat = np.zeros(shape, dtype=self.values.dtype)
+        if len(self) > 0:
+            # Use np.add.at for unbuffered accumulation (handles duplicate indices)
+            idx_tuple = (
+                self.indices[:, 0],
+                self.indices[:, 1],
+                self.indices[:, 2],
+                self.indices[:, 3],
+            )
+            np.add.at(mat, idx_tuple, self.values)
+        return mat
 
 
 class ThreeBodyOperator(Operator):
