@@ -213,9 +213,9 @@ def get_norm_ordered_ham(
     return NO2B_stuff if (NO2B or op3 is None) else (NO2B_stuff, w_res)
 
 
-def get_norm_ord_int(
+def get_norm_ordered_int(
     thisL: int,
-    holes: int,
+    refstate: List[List[int]],
     vT1: float,
     vS1: float,
     str_3NF: float = 0,
@@ -224,22 +224,17 @@ def get_norm_ord_int(
     lattice = lat.get_lattice(thisL)
     myTkin = lat.Tkin(lattice, thisL)
     mycontact = lat.contacts(vT1, vS1, lattice, thisL)
-    hole, part = lat.states2PHSpace(holes, thisL)
+    hole, part = lat.states2PHSpace(refstate, thisL)
 
     hnum, pnum = len(hole), len(part)
     nstat = hnum + pnum
 
-    raw_2b = list(
-        get_all_interactions(part, hole, mycontact, dtype=dtype)
-    )
-
-    fock_mats = list(
-        get_fock_matrices(part, hole, myTkin, raw_2b[3], raw_2b[4], raw_2b[5])
-    )
+    raw_2b = list(get_all_interactions(part, hole, mycontact, dtype=dtype))
+    fock_mats = list(get_fock_matrices(part, hole, myTkin, raw_2b[3], raw_2b[4], raw_2b[5]))
 
     if str_3NF != 0:
-        my3body = lat.NNNcontact(str_3NF, lattice, thisL)
-        w_ops = tbu.get_3NF(part, hole, my3body.to_list())
+        op3 = lat.NNNcontact(str_3NF, lattice, thisL)
+        w_ops = tbu.get_3NF(part, hole, op3)
 
         dum_fock = tbu.get_3NF_fock(hnum, pnum, w_ops[6], w_ops[7], w_ops[8])
         for i in range(3):
