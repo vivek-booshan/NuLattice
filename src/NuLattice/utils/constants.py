@@ -86,24 +86,8 @@ class ReferenceState:
     AR36_GS = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1), (0, 1, 0), (2, 1, 0)])
     CA40_GS = generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1), (2, 0, 1), (2, 1, 2), (2, 0, 2)])
     CA48_GS = (
-        generate_alpha([
-           (1, 1, 0),
-           (1, 1, 1),
-           (1, 1, 2),
-           (1, 0, 1),
-           (0, 1, 1),
-           (2, 1, 1),
-           (1, 2, 1),
-           (2, 0, 1),
-           (2, 1, 2),
-           (2, 0, 2),
-        ]) +
-        generate_neutron([
-             (0, 1, 0),
-             (2, 1, 0),
-             (1, 0, 0),
-             (1, 2, 0),
-         ])
+        generate_alpha([(1, 1, 0), (1, 1, 1), (1, 1, 2), (1, 0, 1), (0, 1, 1), (2, 1, 1), (1, 2, 1), (2, 0, 1), (2, 1, 2), (2, 0, 2),]) +
+        generate_neutron([(0, 1, 0), (2, 1, 0), (1, 0, 0), (1, 2, 0),])
     
     )
 
@@ -119,34 +103,6 @@ class ReferenceState:
         generate_neutron([
             (0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (2, 0, 0), (0, 2, 0), 
             (0, 0, 2), (2, 2, 0), (2, 0, 2), (0, 2, 2), (1, 1, 3)
-        ])
-    )
-    SN100_GS = generate_alpha([ # fill 3x3x3 grid except 000 and 222
-        (x, y, z) for x in range(3) for y in range(3) for z in range(3) 
-        if (x, y, z) not in [(0, 0, 0), (2, 2, 2)]
-    ])
-    SN132_GS = (
-        generate_alpha([
-            (x, y, z) for x in range(3) for y in range(3) for z in range(3) 
-            if (x, y, z) not in [(0, 0, 0), (2, 2, 2)]
-        ]) +
-        generate_neutron([(0, 0, 0), (2, 2, 2)]) + # Fill the missing core corner sites
-        generate_neutron([ # Boundary caps
-            (3, 1, 1), (1, 3, 1), (1, 1, 3), (-1, 1, 1), (1, -1, 1), (1, 1, -1),
-            (3, 2, 1), (1, 3, 2), (2, 1, 3), (-1, 0, 1), (1, -1, 0), (0, 1, -1),
-            (2, 2, 3), (3, 2, 2)
-        ])
-    )
-
-    # Pb-208: 41 Alphas + 22 neutron pairs forming a close-packed sphere inside a 4x4x4 cube
-    PB208_GS = (
-        generate_alpha([
-            (x, y, z) for x in range(4) for y in range(4) for z in range(4)
-            if (x-1.5)**2 + (y-1.5)**2 + (z-1.5)**2 <= 2.25
-        ]) +
-        generate_neutron([
-            (x, y, z) for x in range(4) for y in range(4) for z in range(4)
-            if 2.25 < (x-1.5)**2 + (y-1.5)**2 + (z-1.5)**2 <= 3.25
         ])
     )
 
