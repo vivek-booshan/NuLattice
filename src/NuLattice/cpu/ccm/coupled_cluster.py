@@ -11,12 +11,12 @@ __date__      = "2025-09-03"
 import numpy as np
 from opt_einsum import contract
 from copy import deepcopy
-import sys
-import pathlib
-sys.path.append(str(pathlib.Path(__file__).parent / ".." / ".."))
-import NuLattice.CCM.three_body_utils as tbu
-import NuLattice.lattice as lat
-import NuLattice.CCM.ccDgrams as dgrams
+
+import NuLattice.cpu.lattice as lat
+from NuLattice.cpu.ccm import (
+        three_body_utils as tbu,
+        ccDgrams as dgrams,
+    )
 
 def get_fock_matrices(part,hole,myTkin,v_phph,v_phhh,v_hhhh):
     """
