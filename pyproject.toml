@@ -8,6 +8,18 @@ dependencies = [
     "numpy>=1.24.4",
     "opt-einsum>=3.4.0",
     "scipy>=1.10.1",
+    "jax==0.5.0"
+]
+
+[project.optional-dependencies]
+cpu = [
+    "jax[cpu]==0.5.0"
+]
+rocm = [
+    "jax[rocm]==0.5.0"
+]
+cuda = [
+    "jax[cuda]==0.5.0"
 ]
 
 [build-system]
@@ -27,30 +39,3 @@ dev = [
     "matplotlib>=3.7.5",
     "pytest-memray>=1.8.0",
 ]
-
-torch = [
-    "torch>2.0.0",
-]
-
-jax = [
-    "jax"
-]
-
-rocm = [
-    "pytorch-triton-rocm",
-    "jax[rocm]==0.5.0",
-]
-
-cuda = [
-    "jax[cuda]"
-]
-
-[[tool.uv.index]]
-name = "pytorch-rocm"
-url = "https://download.pytorch.org/whl/rocm6.3"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-rocm", marker = "sys_platform == 'linux'" }
-pytorch-triton-rocm = { index = "pytorch-rocm", marker = "sys_platform == 'linux'" }
-
