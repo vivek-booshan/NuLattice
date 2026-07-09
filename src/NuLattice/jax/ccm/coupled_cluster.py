@@ -50,7 +50,7 @@ def ccsd_energy(f_ph, v_pphh, t2, t1):
 
 
 @jax.jit
-def t1Init(f_ph, f_pp, f_hh, delta):
+def t1Init(f_ph, f_pp, f_hh, delta, chef):
     """
     Initialize the T1 amplitudes using the Moller-Plesset (MP2) guess.
 
@@ -66,11 +66,11 @@ def t1Init(f_ph, f_pp, f_hh, delta):
     jax.Array
         Initial guess for T1 amplitudes.
     """
-    return f_ph / (delta + (-jnp.diag(f_pp)[:, None] + jnp.diag(f_hh)[None, :]))
+    return f_ph / (delta + (-chef.diag(f_pp)[:, None] + chef.diag(f_hh)[None, :]))
 
 
 @jax.jit
-def t2Init(f_pp, f_hh, v_pphh, delta):
+def t2Init(f_pp, f_hh, v_pphh, delta, chef):
     """
     Initialize the T2 amplitudes using the Moller-Plesset (MP2) guess.
 
@@ -88,8 +88,8 @@ def t2Init(f_pp, f_hh, v_pphh, delta):
     jax.Array
         Initial guess for T2 amplitudes (MP2-like).
     """
-    diag_h = jnp.diag(f_hh)
-    diag_p = -jnp.diag(f_pp)
+    diag_h = chef.diag(f_hh)
+    diag_p = -chef.diag(f_pp)
 
     return v_pphh / (
         delta
@@ -210,14 +210,14 @@ def ccsd_solver(
         shard_phph = NamedSharding(chef.mesh, P("nodes", None, "gpus", None))
 
     t1 = (
-        t1Init(f_ph, f_pp, f_hh, delta)
+        t1Init(f_ph, f_pp, f_hh, delta, chef)
         if t1initial is None
         else jnp.zeros_like(t1initial, dtype)  # possible source of memory issue
     )
     t2 = (
         jnp.zeros_like(v_pphh)  # zeros_like should shard like pphh
         if (ccs or t1initial is not None)
-        else t2Init(f_pp, f_hh, v_pphh, delta)
+        else t2Init(f_pp, f_hh, v_pphh, delta, chef)
     )
 
     if max_diis > 0:

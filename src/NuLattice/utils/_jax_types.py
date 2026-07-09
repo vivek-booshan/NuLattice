@@ -106,11 +106,26 @@ class ThreeBodyOperator(Operator):
     def _get_expected_rank(cls):
         return 6
 
+@jax.tree_util.register_pytree_node_class
 class Chef:
     def __init__(self, num_nodes=1, num_gpus=1):
         self.num_nodes = num_nodes
         self.num_gpus = num_gpus
         self.mesh = jax.make_mesh(axis_shapes=(num_nodes, num_gpus), axis_names=("nodes", "gpus"))
+
+    def tree_flatten(self):
+        children = ()
+        aux_data = (self.num_nodes, self.num_gpus, self.mesh)
+        return (children, aux_data)
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        num_nodes, num_gpus, mesh = aux_data
+        obj = cls.__new__(cls)
+        obj.num_nodes = num_nodes
+        obj.num_gpus = num_gpus
+        obj.mesh = mesh
+        return obj
 
     def prepare(self, arr, rank: int = None, spec: NamedSharding = None):
         r = rank if rank is not None else arr.ndim 
@@ -141,3 +156,15 @@ class Chef:
             else:
                 return jax.device_put(arr, sharding)
         return jax.device_put(arr, sharding)
+
+    def diag(self, mat):
+        if mat.ndim != 2:
+            return jnp.diag(mat)
+        
+        spec = getattr(jax.typeof(mat).sharding, "spec", None)
+        if spec and any(axis is not None for axis in spec):
+            idx = jnp.arange(mat.shape[0])
+            out_shd = NamedSharding(self.mesh, P())
+            return mat.at[idx, idx].get(out_sharding=out_shd)
+            
+        return jnp.diag(mat)
