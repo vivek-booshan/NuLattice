@@ -195,7 +195,6 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
     # Diagram 3
     d3_v = jnp.zeros((pnum, pnum)).at[idx_d, idx_a].add(values * t1[idx_c, idx_k])
     d3_int = sm.einsum("da, dbij -> abij", d3_v, t2)
-    # d3_int = cond_sharding_constraint(d3_int, shard_pphh)
     H2 = add_AB(H2, -d3_int)
 
     # Diagram 4
@@ -205,7 +204,6 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
         .add(values[:, None] * t1[idx_c, :])
     )
     d4_int = sm.einsum("acik, bcjk -> abij", d4_v, t2, out_sharding=jax.typeof(H2).sharding)
-    # d4_int = cond_sharding_constraint(d4_int, shard_pphh)
     H2 = add_AB_IJ(H2, d4_int)
 
     # Diagram 5
@@ -215,7 +213,6 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
         .add(values[:, None, None] * t2[idx_c, idx_d, :, :])
     )
     d5_int = sm.einsum("bijk, ak -> abij", d5_v, t1)
-    # d5_int = cond_sharding_constraint(d5_int, shard_pphh)
     H2 = add_AB(H2, 0.5 * d5_int)
 
     # Diagram 6
@@ -227,7 +224,6 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
         .add(values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :]))
     )
     d6_int = sm.einsum("bijk, ak -> abij", d6_v, t1, out_sharding=jax.typeof(H2).sharding)
-    # d6_int = cond_sharding_constraint(d6_int, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d6_int)
 
     return H2
@@ -270,15 +266,13 @@ def t2_H2_pppp(H2, t1, t2, v_pppp, sm):
     t2_sliced = sm.get(t2, (p_idx_c, p_idx_d, slice(None), slice(None)))
     term_1 = 0.5 * values[:, None, None] * t2_sliced
 
-    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(0.5 * term_1, out_sharding=jax.typeof(H2).sharding)
 
     # Diagram 2: H2 += 0.5 * pIJ( V[a,b,c,d] * T1[c,i] * T1[d,j] )
     t1_c = sm.get(t1, (p_idx_c, slice(None)))
     t1_d = sm.get(t1, (p_idx_d, slice(None)))
     term_2 = 0.5 * values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :])
 
-    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(term_2, out_sharding=jax.typeof(H2).sharding)
-    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(-term_2.transpose(0, 2, 1), out_sharding=jax.typeof(H2).sharding)
+    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(term_1 + term_2 - term_2.transpose(0, 2, 1), out_sharding=jax.typeof(H2).sharding)
     return H2
 
 
@@ -383,32 +377,24 @@ def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm):
       of their respective occupied-space (hole) components.
     """
     d1 = sm.einsum("klij, abkl -> abij", v_hhhh, t2)
-    # d1 = cond_sharding_constraint(d1, shard_pphh)
     H2 = H2.at[:].add(0.5 * d1)
 
     d2 = sm.einsum("bkcj, acik -> abij", v_phph, t2, out_sharding=jax.typeof(H2).sharding)
-    # d2 = cond_sharding_constraint(d2, shard_pphh)
     H2 = add_AB_IJ(H2, d2)
 
     d3 = sm.einsum("bkij, ak -> abij", v_phhh, t1, out_sharding=jax.typeof(H2).sharding)
-    # d3 = cond_sharding_constraint(d3, shard_pphh)
     H2 = add_AB(H2, d3)
 
     d4_int = sm.einsum("acik, cdkl -> adil", t2, v_pphh)
-    # d4_int = cond_sharding_constraint(d4_int, shard_pphh)
     d4 = sm.einsum("adil, dblj -> abij", d4_int, t2)
-    # d4 = cond_sharding_constraint(d4, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d4)
 
     d5_int = sm.einsum("cdij, cdkl -> ijkl", t2, v_pphh)
     d5 = sm.einsum("ijkl, abkl -> abij", d5_int, t2)
-    # d5 = cond_sharding_constraint(d5, shard_pphh)
     H2 = H2.at[:].add(0.25 * d5)
 
     return H2
 
-
-# @partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
 @jax.jit
 def t2_H2_dense_part2(
     H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm,
@@ -480,8 +466,6 @@ def t2_H2_dense_part2(
 
     return H2
 
-
-# @partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
 @jax.jit
 def t2_H2_dense_part3(
     H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm,
