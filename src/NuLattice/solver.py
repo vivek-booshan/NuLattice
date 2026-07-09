@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from NuLattice.utils import ReferenceState
+from NuLattice.utils._jax_types import ShardingManager
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +156,7 @@ class CCMSolver(BaseSolver):
         sparse=True,
         verbose=True,
         NO2B=True,
-        chef=None,
+        sm: ShardingManager = None,
     ):
         if self.backend == "cpu":
             from NuLattice.cpu.ccm.coupled_cluster import ccsd_solver
@@ -173,7 +174,7 @@ class CCMSolver(BaseSolver):
                 mixing=mixing,
                 verbose=verbose,
                 ccs=False,
-                chef=chef,
+                sm=sm,
             )
         else:
             Ecorr, t1, t2 = ccsd_solver(
@@ -198,7 +199,7 @@ class HFSolver(BaseSolver):
         mix: float = 0.7,
         max_iter: float = 100,
         verbose: float = False,
-        chef=None,
+        sm: ShardingManager = None,
     ):
         if self.backend == "cpu":
             import NuLattice.cpu.hf.hartree_fock as hf
@@ -221,7 +222,7 @@ class HFSolver(BaseSolver):
                 eps=eps,
                 max_iter=max_iter,
                 verbose=verbose,
-                chef=chef,
+                sm=sm,
             )
         else:
             energy, vecs, conv = hf.solve_HF(
