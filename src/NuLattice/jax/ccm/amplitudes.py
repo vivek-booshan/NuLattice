@@ -10,7 +10,7 @@ from NuLattice.utils._jax_types import ShardingManager
 def add_AB(target, val):
     """target inplace mutation of AB permutation of val"""
     sharding = jax.typeof(target).sharding
-    return target.at[:].add(jax.reshard(val, sharding) - jax.reshard(val.transpose(0, 1, 3, 2), sharding))
+    return target.at[:].add(jax.reshard(val, sharding) - jax.reshard(val.transpose(1, 0, 2, 3), sharding))
 
 
 @jax.jit
@@ -34,16 +34,9 @@ def add_AB_IJ(target, val):
     )
     b = (
         + jax.reshard(val.transpose(1, 0, 2, 3), sharding)
-        + jax.reshard(val.transpose(1, 0, 2, 3), sharding)
+        - jax.reshard(val.transpose(1, 0, 3, 2), sharding)
     )
     return target.at[:].add(a - b)
-
-
-# def cond_sharding_constraint(tensor, shard):
-#     if shard is not None:
-#         return with_sharding_constraint(tensor, shard)
-#     return tensor
-
 
 @jax.jit
 def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph, sm: ShardingManager):
