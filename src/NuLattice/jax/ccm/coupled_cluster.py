@@ -187,8 +187,8 @@ def ccsd_solver(
     shard_pphh = None
     shard_phph = None
     if chef is not None:
-        f_pp = chef.prepare(f_pp)
-        f_ph = chef.prepare(f_ph)
+        f_pp = chef.prepare(f_pp, rank=0)
+        f_ph = chef.prepare(f_ph, rank=0)
         f_hh = chef.prepare(f_hh, rank=0)  # replicate
 
         v_pphh = chef.prepare(v_pphh)
@@ -268,7 +268,7 @@ def ccsd_solver(
         energy = ccsd_energy(f_ph, v_pphh, t2, t1)
         diff = abs(energy - prevEnergy) / max(1.0, abs(energy))
 
-        if verbose:
+        if verbose and jax.process_index() == 0:
             print(f"Step {step + 1}: {energy} difference = {diff}")
 
         if diff < eps:
