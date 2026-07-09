@@ -209,7 +209,7 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
         .at[idx_a, idx_d, :, idx_k]
         .add(values[:, None] * t1[idx_c, :])
     )
-    d4_int = sm.einsum("acik, bcjk -> abij", d4_v, t2)
+    d4_int = sm.einsum("acik, bcjk -> abij", d4_v, t2, out_sharding=jax.typeof(H2).sharding)
     # d4_int = cond_sharding_constraint(d4_int, shard_pphh)
     H2 = add_AB_IJ(H2, d4_int)
 
