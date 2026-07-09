@@ -265,7 +265,7 @@ def ccsd_solver(
         t1 = t1 + mixing * (t1_new - t1)
         del t1_new, t2_new
 
-        energy = ccsd_energy(f_ph, v_pphh, t2, t1)
+        energy = ccsd_energy(f_ph, v_pphh, t2, t1, sm)
         diff = abs(energy - prevEnergy) / max(1.0, abs(energy))
 
         if verbose and jax.process_index() == 0:
