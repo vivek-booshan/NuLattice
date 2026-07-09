@@ -107,7 +107,7 @@ class ThreeBodyOperator(Operator):
         return 6
 
 @jax.tree_util.register_pytree_node_class
-class Chef:
+class ShardingManager:
     def __init__(self, num_nodes=1, num_gpus=1):
         self.num_nodes = num_nodes
         self.num_gpus = num_gpus
@@ -168,3 +168,32 @@ class Chef:
             return mat.at[idx, idx].get(out_sharding=out_shd)
             
         return jnp.diag(mat)
+
+    def einsum(self, subscripts, *operands, out_sharding=None, **kwargs):
+
+        if out_sharding is not None:
+            kwargs["out_sharding"] = out_sharding
+            return jnp.einsum(subscripts, *operands, **kwargs)
+
+        if subscripts.endswith("->"):
+            kwargs["out_sharding"] = NamedSharding(self.mesh, P())
+            return jnp.einsum(subscripts, *operands, **kwargs)
+
+        lhs = subscripts.split("->")[0].split(",")
+        rhs = subscripts.split("->")[1].strip()
+
+        sharding_map = {
+            char: axis
+            for token, op in zip(lhs, operands)
+            for i, char in enumerate(token.strip())
+            if (spec := getattr(jax.typeof(op).sharding, "spec", None))
+            if i < len(spec)
+            if (axis := spec[i]) is not None
+        }
+
+        if not sharding_map:
+            return jnp.einsum(subscripts, *operands, **kwargs)
+
+        out_spec_list = [sharding_map.get(char, None) for char in rhs]
+        kwargs["out_sharding"] = NamedSharding(self.mesh, P(*out_spec_list))
+        return jnp.einsum(subscripts, *operands, **kwargs)
