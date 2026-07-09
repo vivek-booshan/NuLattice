@@ -8,18 +8,17 @@ dependencies = [
     "numpy>=1.24.4",
     "opt-einsum>=3.4.0",
     "scipy>=1.10.1",
-    "jax==0.5.0"
 ]
 
 [project.optional-dependencies]
 cpu = [
-    "jax[cpu]==0.5.0"
+    "jax[cpu]>=0.10.0"
 ]
 rocm = [
-    "jax[rocm]==0.5.0"
+    "jax[rocm7-local]>=0.10.0"
 ]
 cuda = [
-    "jax[cuda]==0.5.0"
+    "jax[cuda]>=0.10.0"
 ]
 
 [build-system]
