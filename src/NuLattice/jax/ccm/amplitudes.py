@@ -1,10 +1,10 @@
-# TODO: align mesh and contraction indices optimally
 from functools import partial
 
 import jax
 import jax.numpy as jnp
 from jax.lax import with_sharding_constraint
 
+from NuLattice.utils._jax_types import ShardingManager
 
 @jax.jit
 def add_AB(target, val):
@@ -39,7 +39,7 @@ def cond_sharding_constraint(tensor, shard):
 
 
 @jax.jit
-def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
+def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph, sm: ShardingManager):
     """
     Perform a single iteration update for the T1 (singles) amplitudes.
 
@@ -77,37 +77,37 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
     idx_c, idx_d, idx_a, idx_k = indices
 
     H1 = f_ph
-    H1 -= jnp.einsum("akci, ck -> ai", v_phph, t1)
-    H1 += jnp.einsum("ck, acik -> ai", f_ph, t2)
-    H1 -= 0.5 * jnp.einsum("cikl, cakl -> ai", v_phhh, t2)
-    H1 += jnp.einsum("cdkl, ck, dali -> ai", v_pphh, t1, t2)
+    H1 -= sm.einsum("akci, ck -> ai", v_phph, t1)
+    H1 += sm.einsum("ck, acik -> ai", f_ph, t2, out_sharding=jax.typeof(H1).sharding)
+    H1 -= 0.5 * sm.einsum("cikl, cakl -> ai", v_phhh, t2)
+    H1 += sm.einsum("cdkl, ck, dali -> ai", v_pphh, t1, t2)
 
     # v_ppph dgram
     # Diagram h1[a, i] -= 0.5 * sum_{cdk} V[c,d,a,k] * T2[c,d,k,i]
     H1.at[idx_a, :].add(-0.5 * values[:, None] * t2[idx_c, idx_d, idx_k, :])
 
     X_hh = -f_hh
-    X_hh -= 0.5 * jnp.einsum("ck, ci -> ki", f_ph, t1)
-    X_hh -= jnp.einsum("bijk, bj -> ki", v_phhh, t1)
-    X_hh -= jnp.einsum("cdlk, cdli -> ki", v_pphh, t2)
-    X_hh -= 0.5 * jnp.einsum("cdlk, cl, di -> ki", v_pphh, t1, t1)
+    X_hh -= 0.5 * sm.einsum("ck, ci -> ki", f_ph, t1)
+    X_hh -= sm.einsum("bijk, bj -> ki", v_phhh, t1)
+    X_hh -= sm.einsum("cdlk, cdli -> ki", v_pphh, t2)
+    X_hh -= 0.5 * sm.einsum("cdlk, cl, di -> ki", v_pphh, t1, t1)
 
     X_pp = f_pp
-    X_pp -= 0.5 * jnp.einsum("ck, ak -> ac", f_ph, t1)
-    X_pp -= 0.5 * jnp.einsum("dckl, dakl -> ac", v_pphh, t2)
-    X_pp += 0.5 * jnp.einsum("cdkl, dk, al -> ac", v_pphh, t1, t1)
+    X_pp -= 0.5 * sm.einsum("ck, ak -> ac", f_ph, t1)
+    X_pp -= 0.5 * sm.einsum("dckl, dakl -> ac", v_pphh, t2)
+    X_pp += 0.5 * sm.einsum("cdkl, dk, al -> ac", v_pphh, t1, t1)
 
     # v_ppph dgram
     X_pp.at[idx_a, idx_d].add(-values * t1[idx_c, idx_k])
 
-    H1 += jnp.einsum("ac, ci -> ai", X_pp, t1)
-    H1 += jnp.einsum("ki, ak -> ai", X_hh, t1)
+    H1 += sm.einsum("ac, ci -> ai", X_pp, t1)
+    H1 += sm.einsum("ki, ak -> ai", X_hh, t1)
 
-    return t1 - (H1 / (jnp.diag(X_pp)[:, None] + jnp.diag(X_hh)[None, :]))
+    return t1 - (H1 / (sm.diag(X_pp)[:, None] + sm.diag(X_hh)[None, :]))
 
 
 @jax.jit
-def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh):
+def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh, sm):
     """
     Construct the effective 1-body intermediates (X_hh, X_pp) for the T2 update.
 
@@ -134,19 +134,20 @@ def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh):
         Effective particle-particle intermediate. Shape: (p, p).
     """
     X_hh = -f_hh
-    X_hh -= 0.5 * jnp.einsum("cdkl, cdjl -> kj", v_pphh, t2)
-    X_hh -= jnp.einsum("ck, cj -> kj", f_ph, t1)
-    X_hh -= jnp.einsum("cdlk, cl, dj -> kj", v_pphh, t1, t1)
+    X_hh -= 0.5 * sm.einsum("cdkl, cdjl -> kj", v_pphh, t2, out_sharding=None)
+    X_hh -= sm.einsum("ck, cj -> kj", f_ph, t1)
+    X_hh -= sm.einsum("cdlk, cl, dj -> kj", v_pphh, t1, t1)
 
     X_pp = f_pp
-    X_pp -= 0.5 * jnp.einsum("cdkl, bdkl -> bc", v_pphh, t2)
-    X_pp -= jnp.einsum("ck, bk -> bc", f_ph, t1)
-    X_pp -= jnp.einsum("cdlk, dk, bl -> bc", v_pphh, t1, t1)
+    X_pp -= 0.5 * sm.einsum("cdkl, bdkl -> bc", v_pphh, t2, out_sharding=None)
+    X_pp -= sm.einsum("ck, bk -> bc", f_ph, t1)
+    X_pp -= sm.einsum("cdlk, dk, bl -> bc", v_pphh, t1, t1)
     return X_hh, X_pp
 
 
-@partial(jax.jit, static_argnames=("shard_pphh",))
-def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
+# @partial(jax.jit, static_argnames=("shard_pphh",))
+@jax.jit
+def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
     """
     Compute T2 residual contributions from the sparse PPPH interaction.
 
@@ -191,8 +192,8 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
 
     # Diagram 3
     d3_v = jnp.zeros((pnum, pnum)).at[idx_d, idx_a].add(values * t1[idx_c, idx_k])
-    d3_int = jnp.einsum("da, dbij -> abij", d3_v, t2)
-    d3_int = cond_sharding_constraint(d3_int, shard_pphh)
+    d3_int = sm.einsum("da, dbij -> abij", d3_v, t2)
+    # d3_int = cond_sharding_constraint(d3_int, shard_pphh)
     H2 = add_AB(H2, -d3_int)
 
     # Diagram 4
@@ -201,8 +202,8 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
         .at[idx_a, idx_d, :, idx_k]
         .add(values[:, None] * t1[idx_c, :])
     )
-    d4_int = jnp.einsum("acik, bcjk -> abij", d4_v, t2)
-    d4_int = cond_sharding_constraint(d4_int, shard_pphh)
+    d4_int = sm.einsum("acik, bcjk -> abij", d4_v, t2)
+    # d4_int = cond_sharding_constraint(d4_int, shard_pphh)
     H2 = add_AB_IJ(H2, d4_int)
 
     # Diagram 5
@@ -211,8 +212,8 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
         .at[idx_a, :, :, idx_k]
         .add(values[:, None, None] * t2[idx_c, idx_d, :, :])
     )
-    d5_int = jnp.einsum("bijk, ak -> abij", d5_v, t1)
-    d5_int = cond_sharding_constraint(d5_int, shard_pphh)
+    d5_int = sm.einsum("bijk, ak -> abij", d5_v, t1)
+    # d5_int = cond_sharding_constraint(d5_int, shard_pphh)
     H2 = add_AB(H2, 0.5 * d5_int)
 
     # Diagram 6
@@ -223,8 +224,8 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh):
         .at[idx_a, :, :, idx_k]
         .add(values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :]))
     )
-    d6_int = jnp.einsum("bijk, ak -> abij", d6_v, t1)
-    d6_int = cond_sharding_constraint(d6_int, shard_pphh)
+    d6_int = sm.einsum("bijk, ak -> abij", d6_v, t1)
+    # d6_int = cond_sharding_constraint(d6_int, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d6_int)
 
     return H2
@@ -277,7 +278,7 @@ def t2_H2_pppp(H2, t1, t2, v_pppp):
 
 
 @jax.jit
-def t2_final_step(t2, X_hh, X_pp, H2):
+def t2_final_step(H2, X_hh, X_pp, t2, sm):
     """
     Finalize the T2 amplitude update using the Jacobi method with intermediates.
 
@@ -306,15 +307,16 @@ def t2_final_step(t2, X_hh, X_pp, H2):
     $\\Delta_{abij} = \\epsilon_a + \\epsilon_b - \\epsilon_i - \\epsilon_j$
     where $\\epsilon$ are the diagonal elements of the X-intermediates.
     """
-    H2 = add_AB(H2, jnp.einsum("bc, acij -> abij", X_pp, t2))
-    H2 = add_IJ(H2, jnp.einsum("kj, abik -> abij", X_hh, t2))
+    H2 = add_AB(H2, sm.einsum("bc, acij -> abij", X_pp, t2, out_sharding=jax.typeof(t2).sharding))
+    H2 = add_IJ(H2, sm.einsum("kj, abik -> abij", X_hh, t2))
 
-    diag_h = jnp.diag(X_hh)
-    diag_p = jnp.diag(X_pp)
+    diag_h = sm.diag(X_hh)
+    diag_p = sm.diag(X_pp)
+
     return t2 - (
         H2
         / (
-            diag_p[:, None, None, None]
+            + diag_p[:, None, None, None]
             + diag_p[None, :, None, None]
             + diag_h[None, None, :, None]
             + diag_h[None, None, None, :]
@@ -322,8 +324,9 @@ def t2_final_step(t2, X_hh, X_pp, H2):
     )
 
 
-@partial(jax.jit, static_argnames=("shard_pphh",))
-def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh):
+# @partial(jax.jit, static_argnames=("shard_pphh",))
+@jax.jit
+def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm):
     """
     Compute Diagrams 1 through 5 of the CCSD T2 amplitude residual.
 
@@ -374,35 +377,36 @@ def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh):
       Two double-excitations "knitted" together via the interaction
       of their respective occupied-space (hole) components.
     """
-    d1 = jnp.einsum("klij, abkl -> abij", v_hhhh, t2)
-    d1 = cond_sharding_constraint(d1, shard_pphh)
+    d1 = sm.einsum("klij, abkl -> abij", v_hhhh, t2)
+    # d1 = cond_sharding_constraint(d1, shard_pphh)
     H2 = H2.at[:].add(0.5 * d1)
 
-    d2 = jnp.einsum("bkcj, acik -> abij", v_phph, t2)
-    d2 = cond_sharding_constraint(d2, shard_pphh)
+    d2 = sm.einsum("bkcj, acik -> abij", v_phph, t2, out_sharding=jax.typeof(H2).sharding)
+    # d2 = cond_sharding_constraint(d2, shard_pphh)
     H2 = add_AB_IJ(H2, d2)
 
-    d3 = jnp.einsum("bkij, ak -> abij", v_phhh, t1)
-    d3 = cond_sharding_constraint(d3, shard_pphh)
+    d3 = sm.einsum("bkij, ak -> abij", v_phhh, t1, out_sharding=jax.typeof(H2).sharding)
+    # d3 = cond_sharding_constraint(d3, shard_pphh)
     H2 = add_AB(H2, d3)
 
-    d4_int = jnp.einsum("acik, cdkl -> adil", t2, v_pphh)
-    d4_int = cond_sharding_constraint(d4_int, shard_pphh)
-    d4 = jnp.einsum("adil, dblj -> abij", d4_int, t2)
-    d4 = cond_sharding_constraint(d4, shard_pphh)
+    d4_int = sm.einsum("acik, cdkl -> adil", t2, v_pphh)
+    # d4_int = cond_sharding_constraint(d4_int, shard_pphh)
+    d4 = sm.einsum("adil, dblj -> abij", d4_int, t2)
+    # d4 = cond_sharding_constraint(d4, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d4)
 
-    d5_int = jnp.einsum("cdij, cdkl -> ijkl", t2, v_pphh, optimize="optimal")
-    d5 = jnp.einsum("ijkl, abkl -> abij", d5_int, t2)
-    d5 = cond_sharding_constraint(d5, shard_pphh)
+    d5_int = sm.einsum("cdij, cdkl -> ijkl", t2, v_pphh)
+    d5 = sm.einsum("ijkl, abkl -> abij", d5_int, t2)
+    # d5 = cond_sharding_constraint(d5, shard_pphh)
     H2 = H2.at[:].add(0.25 * d5)
 
     return H2
 
 
-@partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
+# @partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
+@jax.jit
 def t2_H2_dense_part2(
-    H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph
+    H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm,
 ):
     """
     Compute Diagrams 6 through 10 of the CCSD T2 amplitude residual.
@@ -448,38 +452,39 @@ def t2_H2_dense_part2(
       A T1 excitation "plugging" one of the hole lines of a
       double excitation through a three-hole interaction vertex.
     """
-    d6_int = jnp.einsum("ak, klij -> alij", t1, v_hhhh)
-    d6 = jnp.einsum("alij, bl -> abij", d6_int, t1)
-    d6 = cond_sharding_constraint(d6, shard_pphh)
+    d6_int = sm.einsum("ak, klij -> alij", t1, v_hhhh)
+    d6 = sm.einsum("alij, bl -> abij", d6_int, t1)
+    # d6 = cond_sharding_constraint(d6, shard_pphh)
     H2 = add_AB(H2, 0.5 * d6)
 
-    d7_int = jnp.einsum("cj, bkci -> bkji", t1, v_phph)
-    d7 = jnp.einsum("ak, bkji -> abij", t1, d7_int)
-    d7 = cond_sharding_constraint(d7, shard_pphh)
+    d7_int = sm.einsum("cj, bkci -> bkji", t1, v_phph)
+    d7 = sm.einsum("ak, bkji -> abij", t1, d7_int)
+    # d7 = cond_sharding_constraint(d7, shard_pphh)
     H2 = add_AB_IJ(H2, -d7)
 
-    d8_int = jnp.einsum("cikl, ck -> il", v_phhh, t1)
-    d8 = jnp.einsum("il, ablj -> abij", d8_int, t2)
-    d8 = cond_sharding_constraint(d8, shard_pphh)
+    d8_int = sm.einsum("cikl, ck -> il", v_phhh, t1)
+    d8 = sm.einsum("il, ablj -> abij", d8_int, t2)
+    # d8 = cond_sharding_constraint(d8, shard_pphh)
     H2 = add_IJ(H2, -d8)
 
-    d9_int = jnp.einsum("cikl, al -> ciak", v_phhh, t1)
-    d9_int = cond_sharding_constraint(d9_int, shard_phph)
-    d9 = jnp.einsum("ciak, bcjk -> abij", d9_int, t2)
-    d9 = cond_sharding_constraint(d9, shard_pphh)
+    d9_int = sm.einsum("cikl, al -> ciak", v_phhh, t1)
+    # d9_int = cond_sharding_constraint(d9_int, shard_phph)
+    d9 = sm.einsum("ciak, bcjk -> abij", d9_int, t2)
+    # d9 = cond_sharding_constraint(d9, shard_pphh)
     H2 = add_AB_IJ(H2, -d9)
 
-    d10_int = jnp.einsum("cjkl, ci -> jkli", v_phhh, t1)
-    d10 = jnp.einsum("jkli, abkl -> abij", d10_int, t2)
-    d10 = cond_sharding_constraint(d10, shard_pphh)
+    d10_int = sm.einsum("cjkl, ci -> jkli", v_phhh, t1)
+    d10 = sm.einsum("jkli, abkl -> abij", d10_int, t2)
+    # d10 = cond_sharding_constraint(d10, shard_pphh)
     H2 = add_IJ(H2, 0.5 * d10)
 
     return H2
 
 
-@partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
+# @partial(jax.jit, static_argnames=("shard_pphh", "shard_phph"))
+@jax.jit
 def t2_H2_dense_part3(
-    H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph
+    H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm,
 ):
     """
     Compute Diagrams 11 through 15 of the CCSD T2 amplitude residual.
@@ -528,35 +533,35 @@ def t2_H2_dense_part3(
       The highest order term; four T1 amplitudes coordinated by one
       two-body interaction to produce a double-excitation effect.
     """
-    d11_int1 = jnp.einsum("cjkl, ci -> jkli", v_phhh, t1)
-    d11_int2 = jnp.einsum("jkli, ak -> alij", d11_int1, t1)
-    d11 = jnp.einsum("alij, bl -> abij", d11_int2, t1)
-    d11 = cond_sharding_constraint(d11, shard_pphh)
+    d11_int1 = sm.einsum("cjkl, ci -> jkli", v_phhh, t1)
+    d11_int2 = sm.einsum("jkli, ak -> alij", d11_int1, t1)
+    d11 = sm.einsum("alij, bl -> abij", d11_int2, t1)
+    # d11 = cond_sharding_constraint(d11, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d11)
 
-    d12_int1 = jnp.einsum("cdkl, ci -> dkli", v_pphh, t1)
-    d12_int2 = jnp.einsum("dkli, dj -> klij", d12_int1, t1)
-    d12 = jnp.einsum("klij, abkl -> abij", d12_int2, t2)
-    d12 = cond_sharding_constraint(d12, shard_pphh)
+    d12_int1 = sm.einsum("cdkl, ci -> dkli", v_pphh, t1)
+    d12_int2 = sm.einsum("dkli, dj -> klij", d12_int1, t1)
+    d12 = sm.einsum("klij, abkl -> abij", d12_int2, t2)
+    # d12 = cond_sharding_constraint(d12, shard_pphh)
     H2 = add_IJ(H2, 0.25 * d12)
 
-    d13_int1 = jnp.einsum("cdij, cdkl -> ijkl", t2, v_pphh, optimize="optimal")
-    d13_int2 = jnp.einsum("ijkl, ak -> ijal", d13_int1, t1)
-    d13 = jnp.einsum("ijal, bl -> abij", d13_int2, t1)
-    d13 = cond_sharding_constraint(d13, shard_pphh)
+    d13_int1 = sm.einsum("cdij, cdkl -> ijkl", t2, v_pphh, optimize="optimal")
+    d13_int2 = sm.einsum("ijkl, ak -> ijal", d13_int1, t1)
+    d13 = sm.einsum("ijal, bl -> abij", d13_int2, t1)
+    # d13 = cond_sharding_constraint(d13, shard_pphh)
     H2 = add_AB(H2, 0.25 * d13)
 
-    d14_A = jnp.einsum("cdkl, ci -> dkli", v_pphh, t1)
-    d14_B = jnp.einsum("adkj, dkli -> alij", t2, d14_A)
-    d14 = jnp.einsum("alij, bl -> abij", d14_B, t1)
-    d14 = cond_sharding_constraint(d14, shard_pphh)
+    d14_A = sm.einsum("cdkl, ci -> dkli", v_pphh, t1)
+    d14_B = sm.einsum("adkj, dkli -> alij", t2, d14_A)
+    d14 = sm.einsum("alij, bl -> abij", d14_B, t1)
+    # d14 = cond_sharding_constraint(d14, shard_pphh)
     H2 = add_AB_IJ(H2, d14)
 
-    d15_int1 = jnp.einsum("cdkl, ci -> dkli", v_pphh, t1)
-    d15_int2 = jnp.einsum("dkli, dj -> klij", d15_int1, t1)
-    d15_int3 = jnp.einsum("klij, ak -> alij", d15_int2, t1)
-    d15 = jnp.einsum("alij, bl -> abij", d15_int3, t1)
-    d15 = cond_sharding_constraint(d15, shard_pphh)
+    d15_int1 = sm.einsum("cdkl, ci -> dkli", v_pphh, t1)
+    d15_int2 = sm.einsum("dkli, dj -> klij", d15_int1, t1)
+    d15_int3 = sm.einsum("klij, ak -> alij", d15_int2, t1)
+    d15 = sm.einsum("alij, bl -> abij", d15_int3, t1)
+    # d15 = cond_sharding_constraint(d15, shard_pphh)
     H2 = add_AB_IJ(H2, 0.25 * d15)
 
     return H2
@@ -576,23 +581,18 @@ def t2Iter(
     v_phph,
     v_phhh,
     v_hhhh,
-    shard_pphh,
-    shard_phph,
+    sm,
 ):
     H2 = v_pphh
 
-    H2 = t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh)
-    H2 = t2_H2_dense_part2(
-        H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph
-    )
-    H2 = t2_H2_dense_part3(
-        H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh, shard_phph
-    )
+    H2 = t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm)
+    H2 = t2_H2_dense_part2(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm)
+    H2 = t2_H2_dense_part3(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm)
 
-    H2 = t2_H2_ppph(H2, t1, t2, v_ppph, shard_pphh)
+    H2 = t2_H2_ppph(H2, t1, t2, v_ppph, sm)
     H2 = t2_H2_pppp(H2, t1, t2, v_pppp)
 
-    X_hh, X_pp = t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh)
-    t2_new = t2_final_step(t2, X_hh, X_pp, H2)
+    X_hh, X_pp = t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh, sm)
+    t2_new = t2_final_step(H2, X_hh, X_pp, t2, sm)
 
     return t2_new

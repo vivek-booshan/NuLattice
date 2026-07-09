@@ -6,12 +6,12 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P, NamedSharding
 
-from NuLattice.utils._jax_types import Chef
+from NuLattice.utils._jax_types import ShardingManager
 
 from .amplitudes import t1Iter, t2Iter
 
 @jax.jit
-def ccsd_energy(f_ph, v_pphh, t2, t1):
+def ccsd_energy(f_ph, v_pphh, t2, t1, sm: ShardingManager):
     """
     Calculate the CCSD correlation energy.
 
@@ -43,14 +43,14 @@ def ccsd_energy(f_ph, v_pphh, t2, t1):
     - e2: 0.25 * v_{abij} * t_{abij} (Doubles contribution)
     - e3: 0.5 * v_{abij} * t_{ai} * t_{bj} (Singles-coupling contribution)
     """
-    e_1 = jnp.einsum("ai,ai->", f_ph, t1)
-    e_2 = 0.25 * jnp.einsum("abij,abij->", v_pphh, t2)
-    e_3 = 0.5 * jnp.einsum("abij,ai,bj->", v_pphh, t1, t1)
+    e_1 = sm.einsum("ai,ai->", f_ph, t1)
+    e_2 = 0.25 * sm.einsum("abij,abij->", v_pphh, t2)
+    e_3 = 0.5 * sm.einsum("abij,ai,bj->", v_pphh, t1, t1)
     return e_1 + e_2 + e_3
 
 
 @jax.jit
-def t1Init(f_ph, f_pp, f_hh, delta, chef):
+def t1Init(f_ph, f_pp, f_hh, delta, sm: ShardingManager):
     """
     Initialize the T1 amplitudes using the Moller-Plesset (MP2) guess.
 
@@ -66,11 +66,11 @@ def t1Init(f_ph, f_pp, f_hh, delta, chef):
     jax.Array
         Initial guess for T1 amplitudes.
     """
-    return f_ph / (delta + (-chef.diag(f_pp)[:, None] + chef.diag(f_hh)[None, :]))
+    return f_ph / (delta + (-sm.diag(f_pp)[:, None] + sm.diag(f_hh)[None, :]))
 
 
 @jax.jit
-def t2Init(f_pp, f_hh, v_pphh, delta, chef):
+def t2Init(f_pp, f_hh, v_pphh, delta, sm: ShardingManager):
     """
     Initialize the T2 amplitudes using the Moller-Plesset (MP2) guess.
 
@@ -88,8 +88,8 @@ def t2Init(f_pp, f_hh, v_pphh, delta, chef):
     jax.Array
         Initial guess for T2 amplitudes (MP2-like).
     """
-    diag_h = chef.diag(f_hh)
-    diag_p = -chef.diag(f_pp)
+    diag_h = sm.diag(f_hh)
+    diag_p = -sm.diag(f_pp)
 
     return v_pphh / (
         delta
@@ -125,7 +125,7 @@ def ccsd_solver(
     verbose=False,
     ccs=False,
     dtype=jnp.float64,
-    chef: Optional[Chef] = None,
+    sm: Optional[ShardingManager] = None,
 ):
     """
     Solver for the Coupled Cluster Singles and Doubles (CCSD) equations.
@@ -159,7 +159,7 @@ def ccsd_solver(
         If True, restricts the calculation to Singles only (CCS).
     dtype : jnp.dtype
         Floating point precision (default: float64).
-    chef : Chef, optional
+    sm : ShardingManager, optional
         A distributed orchestration object used to shard and prepare 
         data across multiple devices.
 
@@ -186,38 +186,38 @@ def ccsd_solver(
 
     shard_pphh = None
     shard_phph = None
-    if chef is not None:
-        f_pp = chef.prepare(f_pp, rank=0)
-        f_ph = chef.prepare(f_ph, rank=0)
-        f_hh = chef.prepare(f_hh, rank=0)  # replicate
+    if sm is not None:
+        f_pp = sm.prepare(f_pp, rank=0)
+        f_ph = sm.prepare(f_ph, rank=0)
+        f_hh = sm.prepare(f_hh, rank=0)  # replicate
 
-        v_pphh = chef.prepare(v_pphh)
-        v_phph = chef.prepare(v_phph, spec=P("nodes", None, "gpus", None))
-        v_phhh = chef.prepare(v_phhh)
-        v_hhhh = chef.prepare(v_hhhh, rank=0)  # replicate
+        v_pphh = sm.prepare(v_pphh)
+        v_phph = sm.prepare(v_phph, spec=P("nodes", None, "gpus", None))
+        v_phhh = sm.prepare(v_phhh)
+        v_hhhh = sm.prepare(v_hhhh, rank=0)  # replicate
 
         v_pppp = (
-            chef.prepare(v_pppp[0], rank=0),
-            chef.prepare(v_pppp[1], rank=0),
+            sm.prepare(v_pppp[0], rank=0),
+            sm.prepare(v_pppp[1], rank=0),
         )
 
         v_ppph = (
-            chef.prepare(v_ppph[0], rank=0),
-            chef.prepare(v_ppph[1], rank=0),
+            sm.prepare(v_ppph[0], rank=0),
+            sm.prepare(v_ppph[1], rank=0),
         )
 
-        shard_pphh = NamedSharding(chef.mesh, P("nodes", "gpus", None, None))
-        shard_phph = NamedSharding(chef.mesh, P("nodes", None, "gpus", None))
+        shard_pphh = NamedSharding(sm.mesh, P("nodes", "gpus", None, None))
+        shard_phph = NamedSharding(sm.mesh, P("nodes", None, "gpus", None))
 
     t1 = (
-        t1Init(f_ph, f_pp, f_hh, delta, chef)
+        t1Init(f_ph, f_pp, f_hh, delta, sm)
         if t1initial is None
         else jnp.zeros_like(t1initial, dtype)  # possible source of memory issue
     )
     t2 = (
         jnp.zeros_like(v_pphh)  # zeros_like should shard like pphh
         if (ccs or t1initial is not None)
-        else t2Init(f_pp, f_hh, v_pphh, delta, chef)
+        else t2Init(f_pp, f_hh, v_pphh, delta, sm)
     )
 
     if max_diis > 0:
@@ -226,7 +226,7 @@ def ccsd_solver(
         diis_t1.append(t1)
         diis_t2.append(t2)
 
-    prevEnergy = ccsd_energy(f_ph, v_pphh, t2, t1)
+    prevEnergy = ccsd_energy(f_ph, v_pphh, t2, t1, sm)
     if verbose:
         print(f"Step 0: {prevEnergy}")
 
@@ -241,6 +241,7 @@ def ccsd_solver(
             v_phhh,
             v_pphh,
             v_ppph,
+            sm,
         )
 
         if not ccs:
@@ -256,8 +257,7 @@ def ccsd_solver(
                 v_phph,
                 v_phhh,
                 v_hhhh,
-                shard_pphh,
-                shard_phph,
+                sm,
             )
             t2 = t2 + mixing * (t2_new - t2)
 
