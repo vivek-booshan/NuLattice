@@ -157,7 +157,21 @@ class ShardingManager:
                 return jax.device_put(arr, sharding)
         return jax.device_put(arr, sharding)
 
+    @staticmethod
+    def get(arr, item):
+        spec = getattr(jax.typeof(arr).sharding, "spec", None)
+        if spec and any(axis is not None for axis in spec):
+            # Statically determine the output tensor's rank at trace-time
+            out_aval = jax.eval_shape(lambda: jnp.zeros(arr.shape, dtype=arr.dtype)[item])
+            out_sharding = NamedSharding(
+                jax.typeof(arr).sharding.mesh,
+                jax.sharding.PartitionSpec(*([None] * out_aval.ndim))
+            )
+            return arr.at[item].get(out_sharding=out_sharding)
+        return arr[item]
+
     def diag(self, mat):
+        # TODO: technically mat.ndim == 1; i want to change this
         if mat.ndim != 2:
             return jnp.diag(mat)
         

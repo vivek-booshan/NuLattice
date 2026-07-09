@@ -239,7 +239,7 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
 
 
 @jax.jit
-def t2_H2_pppp(H2, t1, t2, v_pppp):
+def t2_H2_pppp(H2, t1, t2, v_pppp, sm):
     """
     Compute T2 residual contributions from the sparse PPPP interaction.
 
@@ -272,15 +272,18 @@ def t2_H2_pppp(H2, t1, t2, v_pppp):
     values = v_pppp[1]
 
     # Diagram 1: H2 += 0.5 * V[a,b,c,d] * T2[c,d,i,j]
-    term_1 = values[:, None, None] * t2[p_idx_c, p_idx_d, :, :]
-    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(0.5 * term_1)
+    t2_sliced = sm.get(t2, (p_idx_c, p_idx_d, slice(None), slice(None)))
+    term_1 = 0.5 * values[:, None, None] * t2_sliced
+
+    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(0.5 * term_1, out_sharding=jax.typeof(H2).sharding)
 
     # Diagram 2: H2 += 0.5 * pIJ( V[a,b,c,d] * T1[c,i] * T1[d,j] )
-    t1_c = t1[p_idx_c, :]
-    t1_d = t1[p_idx_d, :]
+    t1_c = sm.get(t1, (p_idx_c, slice(None)))
+    t1_d = sm.get(t1, (p_idx_d, slice(None)))
     term_2 = 0.5 * values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :])
-    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(term_2)
-    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(-term_2.transpose(0, 2, 1))
+
+    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(term_2, out_sharding=jax.typeof(H2).sharding)
+    H2 = H2.at[p_idx_a, p_idx_b, :, :].add(-term_2.transpose(0, 2, 1), out_sharding=jax.typeof(H2).sharding)
     return H2
 
 
@@ -597,7 +600,7 @@ def t2Iter(
     H2 = t2_H2_dense_part3(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, sm)
 
     H2 = t2_H2_ppph(H2, t1, t2, v_ppph, sm)
-    H2 = t2_H2_pppp(H2, t1, t2, v_pppp)
+    H2 = t2_H2_pppp(H2, t1, t2, v_pppp, sm)
 
     X_hh, X_pp = t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh, sm)
     t2_new = t2_final_step(H2, X_hh, X_pp, t2, sm)
