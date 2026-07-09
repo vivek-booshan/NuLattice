@@ -97,12 +97,12 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph, sm: Shardin
     X_hh -= 0.5 * sm.einsum("ck, ci -> ki", f_ph, t1)
     X_hh -= sm.einsum("bijk, bj -> ki", v_phhh, t1)
     X_hh -= sm.einsum("cdlk, cdli -> ki", v_pphh, t2)
-    X_hh -= 0.5 * sm.einsum("cdlk, cl, di -> ki", v_pphh, t1, t1)
+    X_hh -= 0.5 * sm.einsum("cdlk, cl, di -> ki", v_pphh, t1, t1, out_sharding=jax.typeof(f_hh).sharding)
 
     X_pp = f_pp
     X_pp -= 0.5 * sm.einsum("ck, ak -> ac", f_ph, t1)
     X_pp -= 0.5 * sm.einsum("dckl, dakl -> ac", v_pphh, t2)
-    X_pp += 0.5 * sm.einsum("cdkl, dk, al -> ac", v_pphh, t1, t1)
+    X_pp += 0.5 * sm.einsum("cdkl, dk, al -> ac", v_pphh, t1, t1, out_sharding=jax.typeof(f_pp).sharding)
 
     # v_ppph dgram
     X_pp.at[idx_a, idx_d].add(-values * t1[idx_c, idx_k])
@@ -140,15 +140,17 @@ def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh, sm):
     X_pp : jax.Array
         Effective particle-particle intermediate. Shape: (p, p).
     """
+    f_hh_sharding = jax.typeof(f_hh).sharding
+    f_pp_sharding = jax.typeof(f_pp).sharding
     X_hh = -f_hh
-    X_hh -= 0.5 * sm.einsum("cdkl, cdjl -> kj", v_pphh, t2, out_sharding=jax.typeof(f_hh).sharding)
+    X_hh -= 0.5 * sm.einsum("cdkl, cdjl -> kj", v_pphh, t2, out_sharding=f_hh_sharding)
     X_hh -= sm.einsum("ck, cj -> kj", f_ph, t1)
-    X_hh -= sm.einsum("cdlk, cl, dj -> kj", v_pphh, t1, t1)
+    X_hh -= sm.einsum("cdlk, cl, dj -> kj", v_pphh, t1, t1, out_sharding=f_hh_sharding)
 
     X_pp = f_pp
-    X_pp -= 0.5 * sm.einsum("cdkl, bdkl -> bc", v_pphh, t2, out_sharding=jax.typeof(f_pp).sharding)
+    X_pp -= 0.5 * sm.einsum("cdkl, bdkl -> bc", v_pphh, t2, out_sharding=f_pp_sharding)
     X_pp -= sm.einsum("ck, bk -> bc", f_ph, t1)
-    X_pp -= sm.einsum("cdlk, dk, bl -> bc", v_pphh, t1, t1)
+    X_pp -= sm.einsum("cdlk, dk, bl -> bc", v_pphh, t1, t1, out_sharding=f_pp_sharding)
     return X_hh, X_pp
 
 
@@ -231,7 +233,7 @@ def t2_H2_ppph(H2, t1, t2, v_ppph, sm):
         .at[idx_a, :, :, idx_k]
         .add(values[:, None, None] * (t1_c[:, :, None] * t1_d[:, None, :]))
     )
-    d6_int = sm.einsum("bijk, ak -> abij", d6_v, t1)
+    d6_int = sm.einsum("bijk, ak -> abij", d6_v, t1, out_sharding=jax.typeof(H2).sharding)
     # d6_int = cond_sharding_constraint(d6_int, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d6_int)
 
@@ -317,7 +319,7 @@ def t2_final_step(H2, X_hh, X_pp, t2, sm):
     $\\Delta_{abij} = \\epsilon_a + \\epsilon_b - \\epsilon_i - \\epsilon_j$
     where $\\epsilon$ are the diagonal elements of the X-intermediates.
     """
-    H2 = add_AB(H2, sm.einsum("bc, acij -> abij", X_pp, t2, out_sharding=jax.typeof(t2).sharding))
+    H2 = add_AB(H2, sm.einsum("bc, acij -> abij", X_pp, t2, out_sharding=jax.typeof(H2).sharding))
     H2 = add_IJ(H2, sm.einsum("kj, abik -> abij", X_hh, t2))
 
     diag_h = sm.diag(X_hh)
@@ -462,30 +464,25 @@ def t2_H2_dense_part2(
       A T1 excitation "plugging" one of the hole lines of a
       double excitation through a three-hole interaction vertex.
     """
+    sharding = jax.typeof(H2).sharding
     d6_int = sm.einsum("ak, klij -> alij", t1, v_hhhh)
-    d6 = sm.einsum("alij, bl -> abij", d6_int, t1)
-    # d6 = cond_sharding_constraint(d6, shard_pphh)
+    d6 = sm.einsum("alij, bl -> abij", d6_int, t1, out_sharding=sharding)
     H2 = add_AB(H2, 0.5 * d6)
 
     d7_int = sm.einsum("cj, bkci -> bkji", t1, v_phph)
-    d7 = sm.einsum("ak, bkji -> abij", t1, d7_int)
-    # d7 = cond_sharding_constraint(d7, shard_pphh)
+    d7 = sm.einsum("ak, bkji -> abij", t1, d7_int, out_sharding=sharding)
     H2 = add_AB_IJ(H2, -d7)
 
     d8_int = sm.einsum("cikl, ck -> il", v_phhh, t1)
-    d8 = sm.einsum("il, ablj -> abij", d8_int, t2)
-    # d8 = cond_sharding_constraint(d8, shard_pphh)
+    d8 = sm.einsum("il, ablj -> abij", d8_int, t2, out_sharding=sharding)
     H2 = add_IJ(H2, -d8)
 
-    d9_int = sm.einsum("cikl, al -> ciak", v_phhh, t1)
-    # d9_int = cond_sharding_constraint(d9_int, shard_phph)
-    d9 = sm.einsum("ciak, bcjk -> abij", d9_int, t2)
-    # d9 = cond_sharding_constraint(d9, shard_pphh)
+    d9_int = sm.einsum("cikl, al -> ciak", v_phhh, t1, out_sharding=sharding)
+    d9 = sm.einsum("ciak, bcjk -> abij", d9_int, t2, out_sharding=sharding)
     H2 = add_AB_IJ(H2, -d9)
 
-    d10_int = sm.einsum("cjkl, ci -> jkli", v_phhh, t1)
-    d10 = sm.einsum("jkli, abkl -> abij", d10_int, t2)
-    # d10 = cond_sharding_constraint(d10, shard_pphh)
+    d10_int = sm.einsum("cjkl, ci -> jkli", v_phhh, t1, out_sharding=sharding)
+    d10 = sm.einsum("jkli, abkl -> abij", d10_int, t2, out_sharding=sharding)
     H2 = add_IJ(H2, 0.5 * d10)
 
     return H2
@@ -543,35 +540,31 @@ def t2_H2_dense_part3(
       The highest order term; four T1 amplitudes coordinated by one
       two-body interaction to produce a double-excitation effect.
     """
-    d11_int1 = sm.einsum("cjkl, ci -> jkli", v_phhh, t1)
-    d11_int2 = sm.einsum("jkli, ak -> alij", d11_int1, t1)
-    d11 = sm.einsum("alij, bl -> abij", d11_int2, t1)
-    # d11 = cond_sharding_constraint(d11, shard_pphh)
+    sharding = jax.typeof(H2).sharding
+    d11_int1 = sm.einsum("cjkl, ci -> jkli", v_phhh, t1, out_sharding=sharding)
+    d11_int2 = sm.einsum("jkli, ak -> alij", d11_int1, t1, out_sharding=sharding)
+    d11 = sm.einsum("alij, bl -> abij", d11_int2, t1, out_sharding=sharding)
     H2 = add_AB_IJ(H2, 0.5 * d11)
 
-    d12_int1 = sm.einsum("cdkl, ci -> dkli", v_pphh, t1)
-    d12_int2 = sm.einsum("dkli, dj -> klij", d12_int1, t1)
-    d12 = sm.einsum("klij, abkl -> abij", d12_int2, t2)
-    # d12 = cond_sharding_constraint(d12, shard_pphh)
+    d12_int1 = sm.einsum("cdkl, ci -> dkli", v_pphh, t1, out_sharding=sharding)
+    d12_int2 = sm.einsum("dkli, dj -> klij", d12_int1, t1, out_sharding=sharding)
+    d12 = sm.einsum("klij, abkl -> abij", d12_int2, t2, out_sharding=sharding)
     H2 = add_IJ(H2, 0.25 * d12)
 
-    d13_int1 = sm.einsum("cdij, cdkl -> ijkl", t2, v_pphh, optimize="optimal")
-    d13_int2 = sm.einsum("ijkl, ak -> ijal", d13_int1, t1)
-    d13 = sm.einsum("ijal, bl -> abij", d13_int2, t1)
-    # d13 = cond_sharding_constraint(d13, shard_pphh)
+    d13_int1 = sm.einsum("cdij, cdkl -> ijkl", t2, v_pphh, out_sharding=sharding)
+    d13_int2 = sm.einsum("ijkl, ak -> ijal", d13_int1, t1, out_sharding=sharding)
+    d13 = sm.einsum("ijal, bl -> abij", d13_int2, t1, out_sharding=sharding)
     H2 = add_AB(H2, 0.25 * d13)
 
-    d14_A = sm.einsum("cdkl, ci -> dkli", v_pphh, t1)
-    d14_B = sm.einsum("adkj, dkli -> alij", t2, d14_A)
-    d14 = sm.einsum("alij, bl -> abij", d14_B, t1)
-    # d14 = cond_sharding_constraint(d14, shard_pphh)
+    d14_A = sm.einsum("cdkl, ci -> dkli", v_pphh, t1, out_sharding=sharding)
+    d14_B = sm.einsum("adkj, dkli -> alij", t2, d14_A, out_sharding=sharding)
+    d14 = sm.einsum("alij, bl -> abij", d14_B, t1, out_sharding=sharding)
     H2 = add_AB_IJ(H2, d14)
 
-    d15_int1 = sm.einsum("cdkl, ci -> dkli", v_pphh, t1)
-    d15_int2 = sm.einsum("dkli, dj -> klij", d15_int1, t1)
-    d15_int3 = sm.einsum("klij, ak -> alij", d15_int2, t1)
-    d15 = sm.einsum("alij, bl -> abij", d15_int3, t1)
-    # d15 = cond_sharding_constraint(d15, shard_pphh)
+    d15_int1 = sm.einsum("cdkl, ci -> dkli", v_pphh, t1, out_sharding=sharding)
+    d15_int2 = sm.einsum("dkli, dj -> klij", d15_int1, t1, out_sharding=sharding)
+    d15_int3 = sm.einsum("klij, ak -> alij", d15_int2, t1, out_sharding=sharding)
+    d15 = sm.einsum("alij, bl -> abij", d15_int3, t1, out_sharding=sharding)
     H2 = add_AB_IJ(H2, 0.25 * d15)
 
     return H2
