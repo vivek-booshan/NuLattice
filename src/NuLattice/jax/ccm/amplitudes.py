@@ -141,12 +141,12 @@ def t2_X(t1, t2, f_pp, f_ph, f_hh, v_pphh, sm):
         Effective particle-particle intermediate. Shape: (p, p).
     """
     X_hh = -f_hh
-    X_hh -= 0.5 * sm.einsum("cdkl, cdjl -> kj", v_pphh, t2, out_sharding=None)
+    X_hh -= 0.5 * sm.einsum("cdkl, cdjl -> kj", v_pphh, t2, out_sharding=jax.typeof(f_hh).sharding)
     X_hh -= sm.einsum("ck, cj -> kj", f_ph, t1)
     X_hh -= sm.einsum("cdlk, cl, dj -> kj", v_pphh, t1, t1)
 
     X_pp = f_pp
-    X_pp -= 0.5 * sm.einsum("cdkl, bdkl -> bc", v_pphh, t2, out_sharding=None)
+    X_pp -= 0.5 * sm.einsum("cdkl, bdkl -> bc", v_pphh, t2, out_sharding=jax.typeof(f_pp).sharding)
     X_pp -= sm.einsum("ck, bk -> bc", f_ph, t1)
     X_pp -= sm.einsum("cdlk, dk, bl -> bc", v_pphh, t1, t1)
     return X_hh, X_pp
