@@ -1,15 +1,16 @@
-from functools import partial
+# from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax.lax import with_sharding_constraint
+# from jax.lax import with_sharding_constraint as wsc
 
 from NuLattice.utils._jax_types import ShardingManager
 
 @jax.jit
 def add_AB(target, val):
     """target inplace mutation of AB permutation of val"""
-    return target.at[:].add(val - val.transpose(1, 0, 2, 3))
+    sharding = jax.typeof(target).sharding
+    return target.at[:].add(jax.reshard(val, sharding) - jax.reshard(val.transpose(0, 1, 3, 2), sharding))
 
 
 @jax.jit
@@ -26,16 +27,22 @@ def add_AB_IJ(target, val):
     val - val(ji) - val(ba) + val(ba, ji)
     """
     # NOTE: must be (a - b) - (c - d)!!! otherwise memory err holding all 4
-    return target.at[:].add(
-        (val - val.transpose(0, 1, 3, 2))
-        - (val.transpose(1, 0, 2, 3) - val.transpose(1, 0, 3, 2))
+    sharding = jax.typeof(target).sharding
+    a = (
+        + jax.reshard(val, sharding)
+        - jax.reshard(val.transpose(0, 1, 3, 2), sharding)
     )
+    b = (
+        + jax.reshard(val.transpose(1, 0, 2, 3), sharding)
+        + jax.reshard(val.transpose(1, 0, 2, 3), sharding)
+    )
+    return target.at[:].add(a - b)
 
 
-def cond_sharding_constraint(tensor, shard):
-    if shard is not None:
-        return with_sharding_constraint(tensor, shard)
-    return tensor
+# def cond_sharding_constraint(tensor, shard):
+#     if shard is not None:
+#         return with_sharding_constraint(tensor, shard)
+#     return tensor
 
 
 @jax.jit
