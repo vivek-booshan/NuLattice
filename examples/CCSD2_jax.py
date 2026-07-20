@@ -2,7 +2,7 @@ import argparse
 
 import NuLattice.jax.lattice as lat
 import NuLattice.jax.ccm as ccm
-from NuLattice.utils._jax_types import Chef
+from NuLattice.utils._jax_types import ShardingManager
 from NuLattice.utils.constants import ReferenceState
 
 def main():
@@ -29,8 +29,8 @@ def main():
     args = parser.parse_args()
 
 
-    # chef = Chef(1, 1)
-    chef = None
+    # sm = ShardingManager(1, 1)
+    sm = None
     if args.shard:
         import jax
         jax.distributed.initialize()
@@ -49,8 +49,8 @@ def main():
         import math
         devices_sqrt = math.sqrt(len(jax.devices()))
         assert devices_sqrt**2 == len(jax.devices()), "total devices must be perfect square"
-        chef = Chef(devices_sqrt, devices_sqrt)
-        # chef = Chef(total_processes, local_devices)
+        sm = ShardingManager(devices_sqrt, devices_sqrt)
+        # sm = ShardingManager(total_processes, local_devices)
 
     phys_unit = lat.phys_unit(args.a_lat)
     lattice = lat.get_lattice(args.L)
@@ -79,7 +79,7 @@ def main():
         mycontact,
         my3body,
         NO2B=True,
-        # chef=chef
+        # sm=sm
     )
 
     print(f"Energy of reference: {refEn*phys_unit} MeV")
@@ -94,7 +94,7 @@ def main():
         mixing=args.mixing,
         verbose=args.verbose, 
         ccs=False,
-        chef=chef
+        sm=sm,
     )
 
     gsEn = (corrEn + refEn) * phys_unit

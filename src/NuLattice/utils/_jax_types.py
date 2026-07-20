@@ -106,7 +106,7 @@ class ThreeBodyOperator(Operator):
     def _get_expected_rank(cls):
         return 6
 
-class Chef:
+class ShardingManager:
     def __init__(self, num_nodes=1, num_gpus=1):
         self.num_nodes = num_nodes
         self.num_gpus = num_gpus

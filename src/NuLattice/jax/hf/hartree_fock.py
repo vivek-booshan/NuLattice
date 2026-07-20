@@ -4,7 +4,7 @@ from typing import Tuple
 import jax
 import jax.numpy as jnp
 
-from NuLattice.utils._jax_types import Chef
+from NuLattice.utils._jax_types import ShardingManager
 
 @jax.jit
 def _local_orthonormalize(V):
@@ -145,15 +145,15 @@ def _hf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     return updated_dens, energy, diff_dens, vecs
 
 # TODO: split func and auto-diff
-def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, chef: Chef = None):
-    if chef is not None:
-        assert chef.num_nodes == 1 or chef.num_gpus == 1, "HF expects 1D mesh, ensure chef.num_nodes or chef.num_gpus is 1"
-        h1_dense = chef.prepare(op1.to_dense(), rank=0)
-        _dens = chef.prepare(dens, rank=0)
-        v2_idx = chef.prepare(op2.indices)
-        v2_val = chef.prepare(op2.values)
-        w3_idx = chef.prepare(op3.indices)
-        w3_val = chef.prepare(op3.values)
+def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, sm: ShardingManager = None):
+    if sm is not None:
+        assert sm.num_nodes == 1 or sm.num_gpus == 1, "HF expects 1D mesh, ensure sm.num_nodes or sm.num_gpus is 1"
+        h1_dense = sm.prepare(op1.to_dense(), rank=0)
+        _dens = sm.prepare(dens, rank=0)
+        v2_idx = sm.prepare(op2.indices)
+        v2_val = sm.prepare(op2.values)
+        w3_idx = sm.prepare(op3.indices)
+        w3_val = sm.prepare(op3.values)
     else:
         h1_dense = jnp.array(op1.to_dense())
         v2_idx, v2_val = jnp.array(op2.indices), jnp.array(op2.values)

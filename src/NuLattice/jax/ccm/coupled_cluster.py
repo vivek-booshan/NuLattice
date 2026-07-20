@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P, NamedSharding
 
-from NuLattice.utils._jax_types import Chef
+from NuLattice.utils._jax_types import ShardingManager
 
 from .amplitudes import t1Iter, t2Iter
 
@@ -125,7 +125,7 @@ def ccsd_solver(
     verbose=False,
     ccs=False,
     dtype=jnp.float64,
-    chef: Optional[Chef] = None,
+    sm: Optional[ShardingManager] = None,
 ):
     """
     Solver for the Coupled Cluster Singles and Doubles (CCSD) equations.
@@ -159,7 +159,7 @@ def ccsd_solver(
         If True, restricts the calculation to Singles only (CCS).
     dtype : jnp.dtype
         Floating point precision (default: float64).
-    chef : Chef, optional
+    sm : ShardingManager, optional
         A distributed orchestration object used to shard and prepare 
         data across multiple devices.
 
@@ -186,28 +186,28 @@ def ccsd_solver(
 
     shard_pphh = None
     shard_phph = None
-    if chef is not None:
-        f_pp = chef.prepare(f_pp)
-        f_ph = chef.prepare(f_ph)
-        f_hh = chef.prepare(f_hh, rank=0)  # replicate
+    if sm is not None:
+        f_pp = sm.prepare(f_pp)
+        f_ph = sm.prepare(f_ph)
+        f_hh = sm.prepare(f_hh, rank=0)  # replicate
 
-        v_pphh = chef.prepare(v_pphh)
-        v_phph = chef.prepare(v_phph, spec=P("nodes", None, "gpus", None))
-        v_phhh = chef.prepare(v_phhh)
-        v_hhhh = chef.prepare(v_hhhh, rank=0)  # replicate
+        v_pphh = sm.prepare(v_pphh)
+        v_phph = sm.prepare(v_phph, spec=P("nodes", None, "gpus", None))
+        v_phhh = sm.prepare(v_phhh)
+        v_hhhh = sm.prepare(v_hhhh, rank=0)  # replicate
 
         v_pppp = (
-            chef.prepare(v_pppp[0], rank=0),
-            chef.prepare(v_pppp[1], rank=0),
+            sm.prepare(v_pppp[0], rank=0),
+            sm.prepare(v_pppp[1], rank=0),
         )
 
         v_ppph = (
-            chef.prepare(v_ppph[0], rank=0),
-            chef.prepare(v_ppph[1], rank=0),
+            sm.prepare(v_ppph[0], rank=0),
+            sm.prepare(v_ppph[1], rank=0),
         )
 
-        shard_pphh = NamedSharding(chef.mesh, P("nodes", "gpus", None, None))
-        shard_phph = NamedSharding(chef.mesh, P("nodes", None, "gpus", None))
+        shard_pphh = NamedSharding(sm.mesh, P("nodes", "gpus", None, None))
+        shard_phph = NamedSharding(sm.mesh, P("nodes", None, "gpus", None))
 
     t1 = (
         t1Init(f_ph, f_pp, f_hh, delta)

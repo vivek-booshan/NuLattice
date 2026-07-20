@@ -5,7 +5,7 @@ import tracemalloc
 
 from NuLattice.solver import HFSolver
 from NuLattice.constants import ReferenceState
-from NuLattice.utils._jax_types import Chef
+from NuLattice.utils._jax_types import ShardingManager
 
 def parse():
     parser = argparse.ArgumentParser(description="Run a NuLattice Hartree-Fock calculation.")
@@ -39,14 +39,14 @@ def main():
         print(f"Error: Reference state for '{args.element}' not found.")
         sys.exit(1)
 
-    chef = None
+    sm = None
     if args.shard:
         assert args.backend == "jax", "backend must be jax"
         import jax
         jax.distributed.initialize()
         
         total_devices = jax.device_count()
-        chef = Chef(1, total_devices)
+        sm = ShardingManager(1, total_devices)
         
         if jax.process_index() == 0:
             print(f"--- Distributed HF Initialized: {total_devices} devices ---")
@@ -64,7 +64,7 @@ def main():
         tracemalloc.start()
 
     start = time.perf_counter()
-    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, chef=chef)
+    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, sm=sm)
     end = time.perf_counter()
     print("warm start:", end - start)
 
