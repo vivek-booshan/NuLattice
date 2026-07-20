@@ -4,7 +4,7 @@ import time
 import tracemalloc
 
 from NuLattice.solver import HFSolver
-from NuLattice.constants import ReferenceState
+from NuLattice.utils.constants import ReferenceState
 from NuLattice.utils._jax_types import ShardingManager
 
 def parse():
