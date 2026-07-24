@@ -84,7 +84,7 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
 
     # v_ppph dgram
     # Diagram h1[a, i] -= 0.5 * sum_{cdk} V[c,d,a,k] * T2[c,d,k,i]
-    H1.at[idx_a, :].add(-0.5 * values[:, None] * t2[idx_c, idx_d, idx_k, :])
+    H1 = H1.at[idx_a, :].add(-0.5 * values[:, None] * t2[idx_c, idx_d, idx_k, :])
 
     X_hh = -f_hh
     X_hh -= 0.5 * jnp.einsum("ck, ci -> ki", f_ph, t1)
@@ -98,7 +98,7 @@ def t1Iter(t1, t2, f_ph, f_pp, f_hh, v_phph, v_phhh, v_pphh, v_ppph):
     X_pp += 0.5 * jnp.einsum("cdkl, dk, al -> ac", v_pphh, t1, t1)
 
     # v_ppph dgram
-    X_pp.at[idx_a, idx_d].add(-values * t1[idx_c, idx_k])
+    X_pp = X_pp.at[idx_a, idx_d].add(-values * t1[idx_c, idx_k])
 
     H1 += jnp.einsum("ac, ci -> ai", X_pp, t1)
     H1 += jnp.einsum("ki, ak -> ai", X_hh, t1)
