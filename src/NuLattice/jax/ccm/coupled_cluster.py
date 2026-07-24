@@ -260,10 +260,11 @@ def ccsd_solver(
                 shard_phph,
             )
             t2 = t2 + mixing * (t2_new - t2)
+            del t2_new
 
         # NOTE: update t1 AFTER t2 updates
         t1 = t1 + mixing * (t1_new - t1)
-        del t1_new, t2_new
+        del t1_new
 
         energy = ccsd_energy(f_ph, v_pphh, t2, t1)
         diff = abs(energy - prevEnergy) / max(1.0, abs(energy))
@@ -272,7 +273,7 @@ def ccsd_solver(
             print(f"Step {step + 1}: {energy} difference = {diff}")
 
         if diff < eps:
-            return float(energy), t1, t2
+            return energy, t1, t2
 
         # NOTE: end of physics step
         # below is DIIS logic
@@ -318,15 +319,14 @@ def ccsd_solver(
                             t2_new_diis += c[k] * diis_t2[k + 1]
 
                     t1, t2 = t1_new_diis, t2_new_diis
+
+                    diis_t1.clear()
+                    diis_t2.clear()
+                    diis_t1.append(t1_new_diis)
+                    diis_t2.append(t2_new_diis)
+
                 except Exception:
                     pass
-
-                diis_t1.clear()
-                diis_t2.clear()
-                diis_t1.append(t1_new_diis)
-                diis_t2.append(t2_new_diis)
-
-                # NOTE: if mem issue; move to np; jax.experimental.multihost_utils.process_allgather to append cpu data back to gpu
 
         if abs(energy) > 1e10 or jnp.isnan(energy):
             print("Diverged.")
