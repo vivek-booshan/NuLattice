@@ -392,7 +392,7 @@ def t2_H2_dense_part1(H2, t1, t2, v_pphh, v_phph, v_phhh, v_hhhh, shard_pphh):
     d4 = cond_sharding_constraint(d4, shard_pphh)
     H2 = add_AB_IJ(H2, 0.5 * d4)
 
-    d5_int = jnp.einsum("cdij, cdkl -> ijkl", t2, v_pphh, optimize="optimal")
+    d5_int = jnp.einsum("cdij, cdkl -> ijkl", t2, v_pphh)
     d5 = jnp.einsum("ijkl, abkl -> abij", d5_int, t2)
     d5 = cond_sharding_constraint(d5, shard_pphh)
     H2 = H2.at[:].add(0.25 * d5)
@@ -540,7 +540,7 @@ def t2_H2_dense_part3(
     d12 = cond_sharding_constraint(d12, shard_pphh)
     H2 = add_IJ(H2, 0.25 * d12)
 
-    d13_int1 = jnp.einsum("cdij, cdkl -> ijkl", t2, v_pphh, optimize="optimal")
+    d13_int1 = jnp.einsum("cdij, cdkl -> ijkl", t2, v_pphh)
     d13_int2 = jnp.einsum("ijkl, ak -> ijal", d13_int1, t1)
     d13 = jnp.einsum("ijal, bl -> abij", d13_int2, t1)
     d13 = cond_sharding_constraint(d13, shard_pphh)
