@@ -3,9 +3,13 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from .helpers import _adjoint, hermitianize
-
 Array = jax.Array
+
+def _adjoint(x):
+    return jnp.swapaxes(jnp.conj(x), -1, -2)
+
+def hermitianize(x):
+    return 0.5 * (x + _adjoint(x))
 
 def _occupied_orbitals(fock: Array, npart, guess: Array, max_iter: float = 4) -> tuple[Array, Array]:
     orbital_energies, orbitals = davidson_eigh(fock, npart, guess, max_iter)
