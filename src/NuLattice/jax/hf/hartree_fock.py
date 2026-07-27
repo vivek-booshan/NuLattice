@@ -101,7 +101,7 @@ def _scf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     residual_density = jnp.sum(jnp.abs(new_density - dens))
     mixed_density = (1.0 - mix) * dens + mix * new_density
     
-    return mixed_density, energy, residual_density, occ
+    return occ, energy, mixed_density, residual_density
 
 def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, sm: ShardingManager = None):
     if sm is not None:
@@ -125,7 +125,7 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
     occ = occupied_orbitals_from_diagonal_density(dens, npart)
 
     for i in range(max_iter):
-        _dens, energy, diff_dens, occ = _scf_step(
+        occ, energy, _dens, diff_dens = _scf_step(
             _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, occ
         )
         
@@ -133,7 +133,7 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
 
         if verbose:
             # convert to jax debug logging
-            print(f"Iter {i}: E={energy:.8f}, dE={dE:.4e}, dRho={diff_dens:.4e}")
+            print(f"Iter {i}: E={energy:.8f}, dE={dE:.6e}, dRho={diff_dens:.6e}")
 
         if (diff_dens < eps or dE < eps) and i > 1:
             converged = True
@@ -141,7 +141,7 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
         
         prev_energy = energy
 
-    return float(energy), occ, converged
+    return energy, occ, converged
 
 def occupied_orbitals_from_diagonal_density(dens: jax.Array, npart: int) -> jax.Array:
     indices = jnp.argsort(jnp.real(jnp.diag(dens)))[-npart:]
