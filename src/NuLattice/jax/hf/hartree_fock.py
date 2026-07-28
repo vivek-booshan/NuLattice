@@ -56,30 +56,37 @@ def build_mean_fields(
     dens: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array,
-    w3_val: Array,
+    w3_idx: Array = None,
+    w3_val: Array = None,
 ) -> tuple[Array, Array]:
     gamma = hermitianize(contract_2nf_fused(v2_idx, v2_val, dens))
-    omega = hermitianize(contract_3nf_fused(w3_idx, w3_val, dens))
+    omega = None
+    if (w3_idx is not None) and (w3_val is not None):
+        omega = hermitianize(contract_3nf_fused(w3_idx, w3_val, dens))
     return gamma, omega
 
 
 def build_fock(
     h1: Array,
     gamma: Array,
-    omega: Array,
+    omega: Array = None,
 ) -> Array:
+    if omega is None:
+        return hermitianize(h1 + gamma)
     return hermitianize(h1 + gamma + 0.5 * omega)
 
 def hf_energy(
     dens: Array,
     h1: Array,
     gamma: Array,
-    omega: Array,
+    omega: Array = None,
 ) -> Array:
+
     e_h1 = jnp.einsum("ij,ji->", h1, dens)
     e_gamma = jnp.einsum("ij,ji->", gamma, dens)
-    e_omega = jnp.einsum("ij,ji->", omega, dens)
+    e_omega = jnp.asarray(0, dtype=jnp.real(dens[0]).dtype)
+    if omega is not None:
+        e_omega = jnp.einsum("ij,ji->", omega, dens)
     return jnp.real(e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega)
 
 def init_density(nstat: int, hole: Tuple[int]):
@@ -103,20 +110,26 @@ def _scf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
     
     return occ, energy, mixed_density, residual_density
 
-def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, sm: ShardingManager = None):
+def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager, dtype=jnp.float64):
     if sm is not None:
         assert sm.num_nodes == 1 or sm.num_gpus == 1, "HF expects 1D mesh, ensure sm.num_nodes or sm.num_gpus is 1"
-        h1_dense = sm.prepare(op1.to_dense(), rank=0)
-        _dens = sm.prepare(dens, rank=0)
+        h1 = sm.prepare(op1.to_dense(), rank=0)
+        dens = sm.prepare(dens, rank=0)
         v2_idx = sm.prepare(op2.indices)
         v2_val = sm.prepare(op2.values)
         w3_idx = sm.prepare(op3.indices)
         w3_val = sm.prepare(op3.values)
     else:
-        h1_dense = jnp.array(op1.to_dense())
-        v2_idx, v2_val = jnp.array(op2.indices), jnp.array(op2.values)
-        w3_idx, w3_val = jnp.array(op3.indices), jnp.array(op3.values)
-        _dens = jnp.array(dens)
+        h1 = jnp.asarray(op1.to_dense())
+        v2_idx, v2_val = jnp.asarray(op2.indices), jnp.asarray(op2.values)
+        w3_idx, w3_val = jnp.asarray(op3.indices), jnp.asarray(op3.values)
+        dens = jnp.asarray(dens)
+
+    return h1, v2_idx, v2_val, w3_idx, w3_val, dens
+
+def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, sm: ShardingManager = None):
+
+    h1_dense, v2_idx, v2_val, w3_idx, w3_val, _dens = prepare_inputs(op1, op2, op3, dens, sm)
 
     prev_energy = 0.0
     converged = False
