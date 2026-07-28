@@ -415,3 +415,14 @@ def states2PHSpace(holeList: LatticeState, myL: int) -> Tuple[Tuple[int], Tuple[
 
 def makeState(x: int, y: int, z: int, tz: int, sz: int) -> LatticeState:
     return [x, y, z, int(tz + 0.5), int(sz + 0.5)]
+
+def index2state(ind, myL, spin=2, isospin=2):
+    sz = ind % spin
+    ind //= spin
+    tz = ind % isospin
+    ind //= isospin
+    z = ind % myL
+    ind //= myL
+    y = ind % myL
+    x = ind // myL
+    return [x, y, z, tz, sz]
