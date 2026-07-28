@@ -5,7 +5,12 @@ Provides useful constants to be used in the rest of the code
 HBARC = 197.3269804  # MeV fm
 MASS_P = 938.27208943 # MeV
 MASS_N = 939.56542194 # MeV
-MASS  = 0.5*(MASS_P+MASS_N)
+# MASS  = 0.5*(MASS_P+MASS_N)
+MASS = 938.92
+G_A = 1.287
+M_PI_0 = 134.98 # MeV
+M_PI_C = 139.57 #MeV
+F_PI = 92.2 #MeV
 
 
 
