@@ -89,59 +89,97 @@ def hf_energy(
         e_omega = jnp.einsum("ij,ji->", omega, dens)
     return jnp.real(e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega)
 
-def init_density(nstat: int, hole: Tuple[int]):
-    dens = jnp.zeros((nstat, nstat))
+def init_density(nstat: int, hole: Tuple[int], dtype=None):
+    dens = jnp.zeros((nstat, nstat), dtype=dtype)
     hole_indices = jnp.array(hole)
     dens = dens.at[hole_indices, hole_indices].set(1.0)
     return dens
 
-@partial(jax.jit, static_argnames=("npart",))
-def _scf_step(dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs):
+@partial(jax.jit, static_argnames=("npart", "diagonalizer"))
+def _scf_step(
+    dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs,
+    diagonalizer,
+):
     gamma, omega = build_mean_fields(dens, v2_idx, v2_val, w3_idx, w3_val)
     fock = build_fock(h1, gamma, omega)
     energy = hf_energy(dens, h1, gamma, omega)
 
-    _, occ = _occupied_orbitals(fock, npart, prev_vecs)
+    if diagonalizer == "dense":
+        _, orbitals = jnp.linalg.eigh(fock)
+        occ = orbitals[:, :npart]
+    else:
+        _, occ = _occupied_orbitals(fock, npart, prev_vecs)
 
-    new_density = occ @ occ.T
+    new_density = occ @ _adjoint(occ)
 
     residual_density = jnp.sum(jnp.abs(new_density - dens))
     mixed_density = (1.0 - mix) * dens + mix * new_density
-    
+
     return occ, energy, mixed_density, residual_density
 
 def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager, dtype=jnp.float64):
+    has_three_body = op3 is not None and len(op3) > 0
+
     if sm is not None:
         assert sm.num_nodes == 1 or sm.num_gpus == 1, "HF expects 1D mesh, ensure sm.num_nodes or sm.num_gpus is 1"
         h1 = sm.prepare(op1.to_dense(), rank=0)
         dens = sm.prepare(dens, rank=0)
         v2_idx = sm.prepare(op2.indices)
         v2_val = sm.prepare(op2.values)
-        w3_idx = sm.prepare(op3.indices)
-        w3_val = sm.prepare(op3.values)
+        if has_three_body:
+            w3_idx = sm.prepare(op3.indices)
+            w3_val = sm.prepare(op3.values)
+        else:
+            w3_idx = None
+            w3_val = None
     else:
         h1 = jnp.asarray(op1.to_dense())
-        v2_idx, v2_val = jnp.asarray(op2.indices), jnp.asarray(op2.values)
-        w3_idx, w3_val = jnp.asarray(op3.indices), jnp.asarray(op3.values)
+        v2_idx = jnp.asarray(op2.indices)
+        v2_val = jnp.asarray(op2.values)
+        if has_three_body:
+            w3_idx = jnp.asarray(op3.indices)
+            w3_val = jnp.asarray(op3.values)
+        else:
+            w3_idx = None
+            w3_val = None
         dens = jnp.asarray(dens)
 
     return h1, v2_idx, v2_val, w3_idx, w3_val, dens
 
-def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, verbose=False, sm: ShardingManager = None):
+def solve_HF(
+    L,
+    a_lat,
+    op1,
+    op2,
+    op3,
+    dens,
+    mix=0.5,
+    eps=1e-8,
+    max_iter=100,
+    verbose=False,
+    sm: ShardingManager = None,
+    diagonalizer="davidson",
+):
 
-    h1_dense, v2_idx, v2_val, w3_idx, w3_val, _dens = prepare_inputs(op1, op2, op3, dens, sm)
+    if diagonalizer not in {"davidson", "dense"}:
+        raise ValueError("diagonalizer must be 'davidson' or 'dense'")
+
+    h1_dense, v2_idx, v2_val, w3_idx, w3_val, _dens = prepare_inputs(
+        op1, op2, op3, dens, sm
+    )
 
     prev_energy = 0.0
     converged = False
-    npart = int(jnp.trace(_dens).round())
+    npart = int(jnp.real(jnp.trace(_dens)).round())
 
-    occ = occupied_orbitals_from_diagonal_density(dens, npart)
+    occ = occupied_orbitals_from_diagonal_density(_dens, npart)
 
     for i in range(max_iter):
         occ, energy, _dens, diff_dens = _scf_step(
-            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, occ
+            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, occ,
+            diagonalizer,
         )
-        
+
         dE = jnp.abs(energy - prev_energy)
 
         if verbose:
@@ -151,7 +189,7 @@ def solve_HF(L, a_lat, op1, op2, op3, dens, mix=0.5, eps=1e-8, max_iter=100, ver
         if (diff_dens < eps or dE < eps) and i > 1:
             converged = True
             break
-        
+
         prev_energy = energy
 
     return energy, occ, converged
