@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, NamedTuple, Tuple, Callable
+from typing import Literal, NamedTuple, Tuple, Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -51,6 +51,14 @@ class HFResult(NamedTuple):
     iterations: Array
     converged: Array
 
+class HFValidation(NamedTuple):
+    particle_number: Array
+    particle_number_error: Array
+    idempotency_residual: Array
+    commutator_residual: Array
+    orbital_residual: Array
+    energy_recomputed: Array
+    energy_error: Array
 
 def _adjoint(x: Array) -> Array:
     return jnp.swapaxes(jnp.conj(x), -1, -2)
@@ -101,9 +109,9 @@ def build_mean_fields(
     dens: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array | None = None,
-    w3_val: Array | None = None,
-) -> tuple[Array, Array | None]:
+    w3_idx: Optional[Array] = None,
+    w3_val: Optional[Array] = None,
+) -> tuple[Array, Optional[Array]]:
     """Build Hermitian two- and optional three-body mean fields."""
     gamma = hermitianize(contract_2nf_fused(v2_idx, v2_val, dens))
     omega = None
@@ -124,8 +132,8 @@ def build_fock_from_density(
     h1: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array | None = None,
-    w3_val: Array | None = None,
+    w3_idx: Optional[Array] = None,
+    w3_val: Optional[Array] = None,
 ) -> Array:
     """Evaluate the density-to-Fock map used by every SCF step."""
     gamma, omega = build_mean_fields(dens, v2_idx, v2_val, w3_idx, w3_val)
@@ -136,7 +144,7 @@ def hf_energy(
     dens: Array,
     h1: Array,
     gamma: Array,
-    omega: Array | None = None,
+    omega: Optional[Array] = None,
 ) -> Array:
     """Evaluate the HF functional from precomputed mean fields."""
     e_h1 = jnp.einsum("ij,ji->", h1, dens)
@@ -152,8 +160,8 @@ def hf_energy_from_density(
     h1: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array | None = None,
-    w3_val: Array | None = None,
+    w3_idx: Optional[Array] = None,
+    w3_val: Optional[Array] = None,
 ) -> Array:
     """Evaluate the HF functional at exactly ``dens``."""
     gamma, omega = build_mean_fields(dens, v2_idx, v2_val, w3_idx, w3_val)
@@ -193,8 +201,8 @@ def _scf_map(
     h1: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array | None,
-    w3_val: Array | None,
+    w3_idx: Optional[Array],
+    w3_val: Optional[Array],
     config: HFConfig,
 ) -> tuple[Array, Array, Array, Array]:
     """Apply one mixed occupied-projector update."""
@@ -209,8 +217,8 @@ def _primal_scf_solve(
     h1: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array | None,
-    w3_val: Array | None,
+    w3_idx: Optional[Array],
+    w3_val: Optional[Array],
     dens0: Array,
     guess_vecs0: Array,
     config: HFConfig,
@@ -293,8 +301,8 @@ def make_hf_solver(config: HFConfig) -> Callable:
         h1: Array,
         v2_idx: Array,
         v2_val: Array,
-        w3_idx: Array | None,
-        w3_val: Array | None,
+        w3_idx: Optional[Array],
+        w3_val: Optional[Array],
         dens0: Array,
         guess_vecs0: Array,
     ) -> HFResult:
@@ -311,8 +319,50 @@ def make_hf_solver(config: HFConfig) -> Callable:
 
     return solve
 
+ 
+def validate_hf_result(
+    result: HFResult,
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Optional[Array],
+    w3_val: Optional[Array],
+    npart: int,
+) -> HFValidation:
+    dens = hermitianize(result.density)
+    fock = build_fock_from_density(
+        dens, h1, v2_idx, v2_val, w3_idx, w3_val
+    )
+    particle_number = jnp.real(jnp.trace(dens))
+    particle_number_error = jnp.abs(
+        particle_number - jnp.asarray(npart, dtype=particle_number.dtype)
+    )
+    idempotency_residual = jnp.max(jnp.abs(dens @ dens - dens))
+    commutator_residual = jnp.max(jnp.abs(fock @ dens - dens @ fock))
+    orbital_residual_matrix = (
+        fock @ result.orbitals
+        - result.orbitals * result.orbital_energies[None, :]
+    )
+    orbital_residual = jnp.max(
+        jnp.linalg.norm(orbital_residual_matrix, axis=0)
+    )
+    energy_recomputed = hf_energy_from_density(
+        dens, h1, v2_idx, v2_val, w3_idx, w3_val
+    )
+    energy_error = jnp.abs(energy_recomputed - result.energy)
+    return HFValidation(
+        particle_number,
+        particle_number_error,
+        idempotency_residual,
+        commutator_residual,
+        orbital_residual,
+        energy_recomputed,
+        energy_error,
+    )
 
-def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager | None = None):
+
+
+def prepare_inputs(op1, op2, op3, dens, sm: Optional[ShardingManager] = None):
     has_three_body = op3 is not None and len(op3) > 0
 
     if sm is not None:
@@ -385,23 +435,3 @@ def solve_HF(
         result.orbitals,
         bool(jax.device_get(result.converged)),
     )
-
-
-__all__ = [
-    "HFConfig",
-    "HFResult",
-    "build_fock",
-    "build_fock_from_density",
-    "build_mean_fields",
-    "contract_2nf_fused",
-    "contract_3nf_fused",
-    "density_from_orbitals",
-    "hermitianize",
-    "hf_energy",
-    "hf_energy_from_density",
-    "init_density",
-    "make_hf_solver",
-    "orbitals_from_diagonal_density",
-    "prepare_inputs",
-    "solve_HF",
-]
