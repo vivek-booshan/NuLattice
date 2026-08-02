@@ -237,7 +237,7 @@ def _primal_scf_solve(
     def cond(state: tuple[Array, ...]) -> Array:
         iteration, _, _, density_residual, energy_change, _ = state
 
-        not_converged = jnp.logical_and(
+        not_converged = jnp.logical_or(
             density_residual > config.density_tol,
             energy_change > config.energy_tol,
         )
@@ -279,7 +279,7 @@ def _primal_scf_solve(
     projector = density_from_orbitals(orbitals)
     residual = jnp.max(jnp.abs(projector - dens))
     energy = hf_energy_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
-    converged = jnp.logical_or(
+    converged = jnp.logical_and(
         residual <= config.density_tol,
         energy_change <= config.energy_tol,
     )
