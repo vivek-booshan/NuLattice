@@ -1,3 +1,5 @@
+import pytest
+
 import jax
 import jax.numpy as jnp
 
@@ -226,3 +228,46 @@ def test_unrolled_and_implicit_gradients_agree_after_convergence():
         atol=2.0e-5,
     )
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "native eigenvector VJPs divide by zero inside a degenerate occupied "
+        "block; the next patch differentiates the projector"
+    ),
+)
+def test_degenerate_occupied_subspace_exposes_native_eigenvector_nan():
+    dtype = jnp.float32
+    v2_idx, v2_val, w3_idx, w3_val = _empty_interactions(dtype)
+    dens0 = jnp.diag(jnp.array([1.0, 1.0, 0.0, 0.0], dtype=dtype))
+    guess0 = orbitals_from_diagonal_density(dens0, 2)
+    config = HFConfig(
+        npart=2,
+        mix=1.0,
+        density_tol=1.0e-7,
+        energy_tol=1.0e-7,
+        scf_max_iter=5,
+        eigensolver="dense",
+        adjoint_tol=1.0e-7,
+    )
+
+    from NuLattice.jax.hf.hartree_fock import make_implicit_hf_solver
+
+    solve = make_implicit_hf_solver(config)
+
+    def density_element(coupling):
+        h1 = jnp.diag(jnp.array([-1.0, -1.0, 1.0, 2.0], dtype=dtype))
+        h1 = h1.at[0, 2].set(coupling).at[2, 0].set(coupling)
+        result = solve(
+            h1,
+            v2_idx,
+            v2_val,
+            w3_idx,
+            w3_val,
+            dens0,
+            guess0,
+        )
+        return result.density[0, 2]
+
+    derivative = jax.grad(density_element)(jnp.asarray(0.0, dtype=dtype))
+    assert jnp.isfinite(derivative)
+    assert jnp.allclose(derivative, -0.5, rtol=2.0e-5, atol=2.0e-5)
