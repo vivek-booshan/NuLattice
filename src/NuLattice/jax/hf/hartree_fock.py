@@ -4,6 +4,7 @@ from typing import Literal, NamedTuple, Tuple, Callable, Optional
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.sparse.linalg import gmres
 
 from NuLattice.utils._jax_types import ShardingManager
 
@@ -14,6 +15,7 @@ from .subspace_solver import (
 
 Array = jax.Array
 EigenSolver = Literal["dense", "davidson"]
+AdjointSolver = Literal["fixed_point", "gmres"]
 
 
 @dataclass(frozen=True)
@@ -27,9 +29,13 @@ class HFConfig:
     davidson_max_iter: int = 10
     verbose: bool = False
 
+    adjoint_solver: AdjointSolver = "fixed_point"
     adjoint_mix: float = 1.0
     adjoint_tol: float = 1.0e-7
     adjoint_max_iter: int = 100
+
+    gmres_restart: int = 8
+    gmres_max_iter: int = 20
 
     def __post_init__(self) -> None:
         if self.npart <= 0:
@@ -44,12 +50,16 @@ class HFConfig:
             raise ValueError(f"unknown eigensolver: {self.eigensolver}")
         if self.davidson_max_iter <= 0:
             raise ValueError("davidson_max_iter must be positive")
+        if self.adjoint_solver not in ("fixed_point", "gmres"):
+            raise ValueError(f"unknown adjoint solver: {self.adjoint_solver}")
         if self.adjoint_tol < 0.0:
             raise ValueError("adjoint_tol must be non-negative")
         if self.adjoint_max_iter <= 0:
             raise ValueError("adjoint_max_iter must be positive")
         if not (0.0 < self.adjoint_mix <= 1.0):
             raise ValueError("adjoint_mix must lie in (0, 1]")
+        if self.gmres_restart <= 0 or self.gmres_max_iter <= 0:
+            raise ValueError("adjoint GMRES iteration limits must be positive")
 
 
 class HFResult(NamedTuple):
@@ -522,11 +532,11 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
         v2_val: Array,
         w3_idx: Array,
         w3_val: Array,
-        dens0: Array,
-        guess_vecs0: Array,
+        init_dens: Array,
+        init_vecs: Array,
     ):
         result = _primal_scf_solve(
-            h1, v2_idx, v2_val, w3_idx, w3_val, dens0, guess_vecs0, config
+            h1, v2_idx, v2_val, w3_idx, w3_val, init_dens, init_vecs, config
         )
         output = (
             result.density,
@@ -543,8 +553,8 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
             w3_val,
             result.density,
             result.orbitals,
-            dens0,
-            guess_vecs0,
+            init_dens,
+            init_vecs,
         )
         return output, saved
 
@@ -558,8 +568,8 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
             w3_val,
             dens_star,
             orbitals_star,
-            dens0,
-            guess_vecs0,
+            init_dens,
+            init_vecs,
         ) = saved
 
         def phi(
@@ -590,32 +600,47 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
         def jacobian_transpose_times(cotangent: Array) -> Array:
             return hermitianize(pullback(hermitianize(cotangent))[3])
 
-        state0 = (
-            jnp.asarray(0, dtype=jnp.int32),
-            jnp.zeros_like(dens_bar),
-            jnp.asarray(jnp.inf, dtype=dens_bar.real.dtype),
-        )
-
-        def adjoint_cond(state: tuple[Array, Array, Array]) -> Array:
-            iteration, _, residual = state
-            return jnp.logical_and(
-                iteration < config.adjoint_max_iter,
-                residual > config.adjoint_tol,
+        if config.adjoint_solver == "fixed_point":
+            state0 = (
+                jnp.asarray(0, dtype=jnp.int32),
+                jnp.zeros_like(dens_bar),
+                jnp.asarray(jnp.inf, dtype=dens_bar.real.dtype),
             )
 
-        def adjoint_body(state: tuple[Array, Array, Array]):
-            iteration, lam, _ = state
-            candidate = dens_bar + jacobian_transpose_times(lam)
-            next_lam = hermitianize(
-                (1.0 - config.adjoint_mix) * lam
-                + config.adjoint_mix * candidate
-            )
-            residual = jnp.max(jnp.abs(next_lam - lam))
-            return iteration + 1, next_lam, residual
+            def adjoint_cond(state: tuple[Array, Array, Array]) -> Array:
+                iteration, _, residual = state
+                return jnp.logical_and(
+                    iteration < config.adjoint_max_iter,
+                    residual > config.adjoint_tol,
+                )
 
-        _, lam, _ = jax.lax.while_loop(
-            adjoint_cond, adjoint_body, state0
-        )
+            def adjoint_body(state: tuple[Array, Array, Array]):
+                iteration, lam, _ = state
+                candidate = dens_bar + jacobian_transpose_times(lam)
+                next_lam = hermitianize(
+                    (1.0 - config.adjoint_mix) * lam
+                    + config.adjoint_mix * candidate
+                )
+                residual = jnp.max(jnp.abs(next_lam - lam))
+                return iteration + 1, next_lam, residual
+
+            _, lam, _ = jax.lax.while_loop(
+                adjoint_cond, adjoint_body, state0
+            )
+        else:
+            def adjoint_operator(lam: Array) -> Array:
+                return hermitianize(lam - jacobian_transpose_times(lam))
+
+            lam, _ = gmres(
+                adjoint_operator,
+                dens_bar,
+                tol=config.adjoint_tol,
+                atol=0.0,
+                restart=config.gmres_restart,
+                maxiter=config.gmres_max_iter,
+                solve_method="batched",
+            )
+            lam = hermitianize(lam)
 
         h1_bar, v2_val_bar, w3_val_bar, _ = pullback(lam)
 
@@ -625,8 +650,8 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
             v2_val_bar,
             None, # w3_idx
             w3_val_bar,
-            jnp.zeros_like(dens0),
-            jnp.zeros_like(guess_vecs0),
+            jnp.zeros_like(init_dens),
+            jnp.zeros_like(init_vecs),
         )
 
     implicit_density.defvjp(implicit_density_fwd, implicit_density_bwd)
