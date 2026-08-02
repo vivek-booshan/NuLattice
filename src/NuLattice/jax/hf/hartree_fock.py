@@ -1,20 +1,64 @@
-from functools import partial
-from typing import Tuple
+from dataclasses import dataclass
+from typing import Literal, NamedTuple, Tuple, Callable
 
 import jax
 import jax.numpy as jnp
 
 from NuLattice.utils._jax_types import ShardingManager
 
-from .subspace_solver import _occupied_orbitals
+from .subspace_solver import (
+    _occupied_orbitals as _davidson_occupied_orbitals,
+    density_from_orbitals,
+)
 
 Array = jax.Array
+Eigensolver = Literal["dense", "davidson"]
 
-def _adjoint(x):
+
+@dataclass(frozen=True)
+class HFConfig:
+    npart: int
+    mix: float = 0.5
+    density_tol: float = 1.0e-8
+    energy_tol: float = 1.0e-8
+    scf_max_iter: int = 100
+    eigensolver: Eigensolver = "davidson"
+    davidson_max_iter: int = 10
+    verbose: bool = False
+
+    def __post_init__(self) -> None:
+        if self.npart <= 0:
+            raise ValueError("npart must be positive")
+        if not (0.0 < self.mix <= 1.0):
+            raise ValueError("mix must lie in (0, 1]")
+        if self.density_tol < 0.0 or self.energy_tol < 0.0:
+            raise ValueError("SCF tolerances must be non-negative")
+        if self.scf_max_iter <= 0:
+            raise ValueError("scf_max_iter must be positive")
+        if self.eigensolver not in ("dense", "davidson"):
+            raise ValueError(f"unknown eigensolver: {self.eigensolver}")
+        if self.davidson_max_iter <= 0:
+            raise ValueError("davidson_max_iter must be positive")
+
+
+class HFResult(NamedTuple):
+    energy: Array
+    density: Array
+    orbital_energies: Array
+    orbitals: Array
+    residual: Array
+    energy_change: Array
+    iterations: Array
+    converged: Array
+
+
+def _adjoint(x: Array) -> Array:
     return jnp.swapaxes(jnp.conj(x), -1, -2)
 
-def hermitianize(x):
+
+def hermitianize(x: Array) -> Array:
     return 0.5 * (x + _adjoint(x))
+
 
 @jax.jit
 def contract_2nf_fused(indices: Array, values: Array, dens: Array) -> Array:
@@ -52,78 +96,232 @@ def contract_3nf_fused(indices: Array, values: Array, dens: Array) -> Array:
     res = res.at[c, f].add(v2 * (dens[a, d] * dens[b, e] - dens[b, d] * dens[a, e]))
     return res
 
+
 def build_mean_fields(
     dens: Array,
     v2_idx: Array,
     v2_val: Array,
-    w3_idx: Array = None,
-    w3_val: Array = None,
-) -> tuple[Array, Array]:
+    w3_idx: Array | None = None,
+    w3_val: Array | None = None,
+) -> tuple[Array, Array | None]:
+    """Build Hermitian two- and optional three-body mean fields."""
     gamma = hermitianize(contract_2nf_fused(v2_idx, v2_val, dens))
     omega = None
-    if (w3_idx is not None) and (w3_val is not None):
+    if w3_idx is not None and w3_val is not None:
         omega = hermitianize(contract_3nf_fused(w3_idx, w3_val, dens))
     return gamma, omega
 
 
-def build_fock(
-    h1: Array,
-    gamma: Array,
-    omega: Array = None,
-) -> Array:
+def build_fock(h1: Array, gamma: Array, omega: Array | None = None) -> Array:
+    """Assemble a Fock matrix from precomputed mean fields."""
     if omega is None:
         return hermitianize(h1 + gamma)
     return hermitianize(h1 + gamma + 0.5 * omega)
+
+
+def build_fock_from_density(
+    dens: Array,
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Array | None = None,
+    w3_val: Array | None = None,
+) -> Array:
+    """Evaluate the density-to-Fock map used by every SCF step."""
+    gamma, omega = build_mean_fields(dens, v2_idx, v2_val, w3_idx, w3_val)
+    return build_fock(h1, gamma, omega)
+
 
 def hf_energy(
     dens: Array,
     h1: Array,
     gamma: Array,
-    omega: Array = None,
+    omega: Array | None = None,
 ) -> Array:
-
+    """Evaluate the HF functional from precomputed mean fields."""
     e_h1 = jnp.einsum("ij,ji->", h1, dens)
     e_gamma = jnp.einsum("ij,ji->", gamma, dens)
-    e_omega = jnp.asarray(0, dtype=jnp.real(dens[0]).dtype)
+    e_omega = jnp.asarray(0, dtype=jnp.real(dens[0, 0]).dtype)
     if omega is not None:
         e_omega = jnp.einsum("ij,ji->", omega, dens)
     return jnp.real(e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega)
 
-def init_density(nstat: int, hole: Tuple[int], dtype=None):
-    dens = jnp.zeros((nstat, nstat), dtype=dtype)
-    hole_indices = jnp.array(hole)
-    dens = dens.at[hole_indices, hole_indices].set(1.0)
-    return dens
 
-@partial(jax.jit, static_argnames=("npart", "diagonalizer"))
-def _scf_step(
-    dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs,
-    diagonalizer,
-):
+def hf_energy_from_density(
+    dens: Array,
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Array | None = None,
+    w3_val: Array | None = None,
+) -> Array:
+    """Evaluate the HF functional at exactly ``dens``."""
     gamma, omega = build_mean_fields(dens, v2_idx, v2_val, w3_idx, w3_val)
-    fock = build_fock(h1, gamma, omega)
-    energy = hf_energy(dens, h1, gamma, omega)
+    return hf_energy(dens, h1, gamma, omega)
 
-    if diagonalizer == "dense":
-        _, orbitals = jnp.linalg.eigh(fock)
-        occ = orbitals[:, :npart]
-    else:
-        _, occ = _occupied_orbitals(fock, npart, prev_vecs)
 
-    new_density = occ @ _adjoint(occ)
+def init_density(nstat: int, hole: Tuple[int, ...], dtype=None) -> Array:
+    dens = jnp.zeros((nstat, nstat), dtype=dtype)
+    hole_indices = jnp.asarray(hole, dtype=jnp.int32)
+    return dens.at[hole_indices, hole_indices].set(1.0)
 
-    residual_density = jnp.sum(jnp.abs(new_density - dens))
-    mixed_density = (1.0 - mix) * dens + mix * new_density
 
-    return occ, energy, mixed_density, residual_density
+def orbitals_from_diagonal_density(dens: Array, npart: int) -> Array:
+    """Choose occupied columns from a diagonal/idempotent initial density."""
+    indices = jnp.argsort(jnp.real(jnp.diag(dens)))[-npart:]
+    return dens[:, indices]
 
-def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager, dtype=jnp.float64):
+def _occupied_orbitals(
+    fock: Array,
+    guess_vecs: Array,
+    config: HFConfig,
+) -> tuple[Array, Array]:
+    if config.eigensolver == "dense" or 2 * config.npart > fock.shape[0]:
+        vals, vecs = jnp.linalg.eigh(hermitianize(fock))
+        return jnp.real(vals[: config.npart]), vecs[:, : config.npart]
+    return _davidson_occupied_orbitals(
+        fock,
+        config.npart,
+        guess_vecs,
+        config.davidson_max_iter,
+    )
+
+
+def _scf_map(
+    dens: Array,
+    guess_vecs: Array,
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Array | None,
+    w3_val: Array | None,
+    config: HFConfig,
+) -> tuple[Array, Array, Array, Array]:
+    """Apply one mixed occupied-projector update."""
+    fock = build_fock_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
+    orbital_energies, orbitals = _occupied_orbitals(fock, guess_vecs, config)
+    projector = density_from_orbitals(orbitals)
+    mixed = hermitianize((1.0 - config.mix) * dens + config.mix * projector)
+    return mixed, orbitals, orbital_energies, projector
+
+
+def _primal_scf_solve(
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Array | None,
+    w3_val: Array | None,
+    dens0: Array,
+    guess_vecs0: Array,
+    config: HFConfig,
+) -> HFResult:
+
+    energy0 = hf_energy_from_density(dens0, h1, v2_idx, v2_val, w3_idx, w3_val)
+    state0 = (
+        jnp.asarray(0, dtype=jnp.int32),
+        hermitianize(dens0),
+        guess_vecs0,
+        jnp.asarray(jnp.inf, dtype=dens0.real.dtype),
+        jnp.asarray(jnp.inf, dtype=energy0.dtype),
+        energy0,
+    )
+
+    def cond(state: tuple[Array, ...]) -> Array:
+        iteration, _, _, density_residual, energy_change, _ = state
+
+        not_converged = jnp.logical_and(
+            density_residual > config.density_tol,
+            energy_change > config.energy_tol,
+        )
+        return jnp.logical_and(iteration < config.scf_max_iter, not_converged)
+
+    def body(state: tuple[Array, ...]) -> tuple[Array, ...]:
+        iteration, dens, guess, _, _, energy = state
+        mixed, orbitals, _, projector = _scf_map(
+            dens, guess, h1, v2_idx, v2_val, w3_idx, w3_val, config
+        )
+        next_energy = hf_energy_from_density(
+            mixed, h1, v2_idx, v2_val, w3_idx, w3_val
+        )
+        density_residual = jnp.max(jnp.abs(projector - dens))
+        energy_change = jnp.abs(next_energy - energy)
+        if config.verbose:
+            jax.debug.print(
+                "Iter {iteration}: E={energy:.8f}, dE={de:.4e}, dRho={drho:.4e}",
+                iteration=iteration,
+                energy=next_energy,
+                de=energy_change,
+                drho=density_residual,
+            )
+        return (
+            iteration + 1,
+            mixed,
+            orbitals,
+            density_residual,
+            energy_change,
+            next_energy,
+        )
+
+    iteration, dens, warm_orbitals, _, energy_change, _ = jax.lax.while_loop(
+        cond, body, state0
+    )
+
+    fock = build_fock_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
+    orbital_energies, orbitals = _occupied_orbitals(fock, warm_orbitals, config)
+    projector = density_from_orbitals(orbitals)
+    residual = jnp.max(jnp.abs(projector - dens))
+    energy = hf_energy_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
+    converged = jnp.logical_or(
+        residual <= config.density_tol,
+        energy_change <= config.energy_tol,
+    )
+    return HFResult(
+        energy,
+        dens,
+        orbital_energies,
+        orbitals,
+        residual,
+        energy_change,
+        iteration,
+        converged,
+    )
+
+
+def make_hf_solver(config: HFConfig) -> Callable:
+
+    def solve(
+        h1: Array,
+        v2_idx: Array,
+        v2_val: Array,
+        w3_idx: Array | None,
+        w3_val: Array | None,
+        dens0: Array,
+        guess_vecs0: Array,
+    ) -> HFResult:
+        return _primal_scf_solve(
+            h1,
+            v2_idx,
+            v2_val,
+            w3_idx,
+            w3_val,
+            dens0,
+            guess_vecs0,
+            config,
+        )
+
+    return solve
+
+
+def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager | None = None):
     has_three_body = op3 is not None and len(op3) > 0
 
     if sm is not None:
-        assert sm.num_nodes == 1 or sm.num_gpus == 1, "HF expects 1D mesh, ensure sm.num_nodes or sm.num_gpus is 1"
+        if sm.num_nodes != 1 and sm.num_gpus != 1:
+            raise ValueError(
+                "HF expects a 1D mesh; ensure sm.num_nodes or sm.num_gpus is 1"
+            )
         h1 = sm.prepare(op1.to_dense(), rank=0)
-        dens = sm.prepare(dens, rank=0)
+        dens_array = sm.prepare(dens, rank=0)
         v2_idx = sm.prepare(op2.indices)
         v2_val = sm.prepare(op2.values)
         if has_three_body:
@@ -134,17 +332,18 @@ def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager, dtype=jnp.float64):
             w3_val = None
     else:
         h1 = jnp.asarray(op1.to_dense())
-        v2_idx = jnp.asarray(op2.indices)
+        dens_array = jnp.asarray(dens)
+        v2_idx = jnp.asarray(op2.indices, dtype=jnp.int32)
         v2_val = jnp.asarray(op2.values)
         if has_three_body:
-            w3_idx = jnp.asarray(op3.indices)
+            w3_idx = jnp.asarray(op3.indices, dtype=jnp.int32)
             w3_val = jnp.asarray(op3.values)
         else:
             w3_idx = None
             w3_val = None
-        dens = jnp.asarray(dens)
 
-    return h1, v2_idx, v2_val, w3_idx, w3_val, dens
+    return h1, v2_idx, v2_val, w3_idx, w3_val, dens_array
+
 
 def solve_HF(
     L,
@@ -154,46 +353,55 @@ def solve_HF(
     op3,
     dens,
     mix=0.5,
-    eps=1e-8,
+    eps=1.0e-8,
     max_iter=100,
     verbose=False,
-    sm: ShardingManager = None,
+    sm: ShardingManager | None = None,
     diagonalizer="davidson",
 ):
-
+    del L, a_lat
     if diagonalizer not in {"davidson", "dense"}:
         raise ValueError("diagonalizer must be 'davidson' or 'dense'")
 
-    h1_dense, v2_idx, v2_val, w3_idx, w3_val, _dens = prepare_inputs(
+    h1, v2_idx, v2_val, w3_idx, w3_val, dens0 = prepare_inputs(
         op1, op2, op3, dens, sm
     )
+    npart = int(jax.device_get(jnp.rint(jnp.real(jnp.trace(dens0)))))
+    config = HFConfig(
+        npart=npart,
+        mix=float(mix),
+        density_tol=float(eps),
+        energy_tol=float(eps),
+        scf_max_iter=int(max_iter),
+        eigensolver=diagonalizer,
+        verbose=bool(verbose),
+    )
+    guess0 = orbitals_from_diagonal_density(dens0, npart)
+    result = jax.jit(make_hf_solver(config))(
+        h1, v2_idx, v2_val, w3_idx, w3_val, dens0, guess0
+    )
+    return (
+        float(jax.device_get(result.energy)),
+        result.orbitals,
+        bool(jax.device_get(result.converged)),
+    )
 
-    prev_energy = 0.0
-    converged = False
-    npart = int(jnp.real(jnp.trace(_dens)).round())
 
-    occ = occupied_orbitals_from_diagonal_density(_dens, npart)
-
-    for i in range(max_iter):
-        occ, energy, _dens, diff_dens = _scf_step(
-            _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, occ,
-            diagonalizer,
-        )
-
-        dE = jnp.abs(energy - prev_energy)
-
-        if verbose:
-            # convert to jax debug logging
-            print(f"Iter {i}: E={energy:.8f}, dE={dE:.6e}, dRho={diff_dens:.6e}")
-
-        if (diff_dens < eps or dE < eps) and i > 1:
-            converged = True
-            break
-
-        prev_energy = energy
-
-    return energy, occ, converged
-
-def occupied_orbitals_from_diagonal_density(dens: jax.Array, npart: int) -> jax.Array:
-    indices = jnp.argsort(jnp.real(jnp.diag(dens)))[-npart:]
-    return dens[:, indices]
+__all__ = [
+    "HFConfig",
+    "HFResult",
+    "build_fock",
+    "build_fock_from_density",
+    "build_mean_fields",
+    "contract_2nf_fused",
+    "contract_3nf_fused",
+    "density_from_orbitals",
+    "hermitianize",
+    "hf_energy",
+    "hf_energy_from_density",
+    "init_density",
+    "make_hf_solver",
+    "orbitals_from_diagonal_density",
+    "prepare_inputs",
+    "solve_HF",
+]
