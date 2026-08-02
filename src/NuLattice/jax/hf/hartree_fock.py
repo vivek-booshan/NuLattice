@@ -12,7 +12,7 @@ from .subspace_solver import (
 )
 
 Array = jax.Array
-Eigensolver = Literal["dense", "davidson"]
+EigenSolver = Literal["dense", "davidson"]
 
 
 @dataclass(frozen=True)
@@ -22,9 +22,13 @@ class HFConfig:
     density_tol: float = 1.0e-8
     energy_tol: float = 1.0e-8
     scf_max_iter: int = 100
-    eigensolver: Eigensolver = "davidson"
+    eigensolver: EigenSolver = "davidson"
     davidson_max_iter: int = 10
     verbose: bool = False
+
+    adjoint_mix: float = 1.0
+    adjoint_tol: float = 1.0e-7
+    adjoint_max_iter: int = 100
 
     def __post_init__(self) -> None:
         if self.npart <= 0:
@@ -39,6 +43,12 @@ class HFConfig:
             raise ValueError(f"unknown eigensolver: {self.eigensolver}")
         if self.davidson_max_iter <= 0:
             raise ValueError("davidson_max_iter must be positive")
+        if self.adjoint_tol < 0.0:
+            raise ValueError("adjoint_tol must be non-negative")
+        if self.adjoint_max_iter <= 0:
+            raise ValueError("adjoint_max_iter must be positive")
+        if not (0.0 < self.adjoint_mix <= 1.0):
+            raise ValueError("adjoint_mix must lie in (0, 1]")
 
 
 class HFResult(NamedTuple):
@@ -480,3 +490,182 @@ def solve_HF(
         result.orbitals,
         bool(jax.device_get(result.converged)),
     )
+
+# (1 - J_rho Phi)^H lambda = rho_bar
+def make_implicit_hf_solver(config: HFConfig) -> Callable:
+
+    @jax.custom_vjp
+    def implicit_density(
+        h1: Array,
+        v2_idx: Array,
+        v2_val: Array,
+        w3_idx: Array,
+        w3_val: Array,
+        init_dens: Array,
+        init_vecs: Array,
+    ) -> tuple[Array, Array, Array, Array, Array]:
+        result = _primal_scf_solve(
+            h1, v2_idx, v2_val, w3_idx, w3_val, init_dens, init_vecs, config
+        )
+        return (
+            result.density,
+            jax.lax.stop_gradient(result.orbitals),
+            jax.lax.stop_gradient(result.iterations),
+            jax.lax.stop_gradient(result.residual),
+            jax.lax.stop_gradient(result.energy_change),
+        )
+
+    def implicit_density_fwd(
+        h1: Array,
+        v2_idx: Array,
+        v2_val: Array,
+        w3_idx: Array,
+        w3_val: Array,
+        dens0: Array,
+        guess_vecs0: Array,
+    ):
+        result = _primal_scf_solve(
+            h1, v2_idx, v2_val, w3_idx, w3_val, dens0, guess_vecs0, config
+        )
+        output = (
+            result.density,
+            jax.lax.stop_gradient(result.orbitals),
+            jax.lax.stop_gradient(result.iterations),
+            jax.lax.stop_gradient(result.residual),
+            jax.lax.stop_gradient(result.energy_change),
+        )
+        saved = (
+            h1,
+            v2_idx,
+            v2_val,
+            w3_idx,
+            w3_val,
+            result.density,
+            result.orbitals,
+            dens0,
+            guess_vecs0,
+        )
+        return output, saved
+
+
+    def implicit_density_bwd(saved, output_cotangents):
+        (
+            h1,
+            v2_idx,
+            v2_val,
+            w3_idx,
+            w3_val,
+            dens_star,
+            orbitals_star,
+            dens0,
+            guess_vecs0,
+        ) = saved
+
+        def phi(
+            h1_arg: Array,
+            v2_val_arg: Array,
+            w3_val_arg: Array,
+            dens_arg: Array,
+        ) -> Array:
+            mixed, _, _, _ = _scf_step(
+                dens_arg,
+                jax.lax.stop_gradient(orbitals_star),
+                h1_arg,
+                v2_idx,
+                v2_val_arg,
+                w3_idx,
+                w3_val_arg,
+                config,
+            )
+            return mixed
+
+        dens_bar = hermitianize(output_cotangents[0])
+
+        # NOTE(vivek): rematerialize the one-step map for each adjoint matvec instead of
+        # retaining every NxN intermediate from the primal history
+        phi_remat = jax.checkpoint(phi)
+        _, pullback = jax.vjp(phi_remat, h1, v2_val, w3_val, dens_star)
+
+        def jacobian_transpose_times(cotangent: Array) -> Array:
+            return hermitianize(pullback(hermitianize(cotangent))[3])
+
+        state0 = (
+            jnp.asarray(0, dtype=jnp.int32),
+            jnp.zeros_like(dens_bar),
+            jnp.asarray(jnp.inf, dtype=dens_bar.real.dtype),
+        )
+
+        def adjoint_cond(state: tuple[Array, Array, Array]) -> Array:
+            iteration, _, residual = state
+            return jnp.logical_and(
+                iteration < config.adjoint_max_iter,
+                residual > config.adjoint_tol,
+            )
+
+        def adjoint_body(state: tuple[Array, Array, Array]):
+            iteration, lam, _ = state
+            candidate = dens_bar + jacobian_transpose_times(lam)
+            next_lam = hermitianize(
+                (1.0 - config.adjoint_mix) * lam
+                + config.adjoint_mix * candidate
+            )
+            residual = jnp.max(jnp.abs(next_lam - lam))
+            return iteration + 1, next_lam, residual
+
+        _, lam, _ = jax.lax.while_loop(
+            adjoint_cond, adjoint_body, state0
+        )
+
+        h1_bar, v2_val_bar, w3_val_bar, _ = pullback(lam)
+
+        return (
+            hermitianize(h1_bar),
+            None, # v2_idx
+            v2_val_bar,
+            None, # w3_idx
+            w3_val_bar,
+            jnp.zeros_like(dens0),
+            jnp.zeros_like(guess_vecs0),
+        )
+
+    implicit_density.defvjp(implicit_density_fwd, implicit_density_bwd)
+
+    def solve(
+        h1: Array,
+        v2_idx: Array,
+        v2_val: Array,
+        w3_idx: Array,
+        w3_val: Array,
+        init_dens: Array,
+        init_vecs: Array,
+    ) -> HFResult:
+        dens, warm_orbitals, iterations, _, energy_change = implicit_density(
+            h1, v2_idx, v2_val, w3_idx, w3_val, init_dens, init_vecs
+        )
+        fock = build_fock_from_density(
+            dens, h1, v2_idx, v2_val, w3_idx, w3_val
+        )
+        orbital_energies, orbitals = _occupied_orbitals(
+            fock, jax.lax.stop_gradient(warm_orbitals), config
+        )
+        projector = density_from_orbitals(orbitals)
+        residual = jnp.max(jnp.abs(projector - dens))
+        energy = hf_energy_from_density(
+            dens, h1, v2_idx, v2_val, w3_idx, w3_val
+        )
+        converged = jnp.logical_and(
+            residual <= config.density_tol,
+            energy_change <= config.energy_tol,
+        )
+        return HFResult(
+            energy,
+            dens,
+            jax.lax.stop_gradient(orbital_energies),
+            jax.lax.stop_gradient(orbitals),
+            residual,
+            energy_change,
+            iterations,
+            converged,
+        )
+
+    return solve
