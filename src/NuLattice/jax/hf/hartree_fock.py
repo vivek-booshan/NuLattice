@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Literal, NamedTuple, Tuple, Callable, Optional
 
 import jax
@@ -669,3 +670,23 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
         )
 
     return solve
+
+# NOTE(vivek) when set to none the cache can grow without bound, but HFConfig doesn't change so it should be fine ... probably
+# NOTE(vivek) lru cache avoids jax re-tracing and re-compiling on every call, contingent on static hashable dataclass
+@lru_cache(maxsize=None)
+def _cached_jitted_implicit_solver(config: HFConfig):
+    return jax.jit(make_implicit_hf_solver(config))
+
+def solve_hf_implicit(
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Array,
+    w3_val: Array,
+    init_dens: Array,
+    init_vecs: Array,
+    config: HFConfig,
+) -> HFResult: 
+    return _cached_jitted_implicit_solver(config)(
+        h1, v2_idx, v2_val, w3_idx, w3_val, init_dens, init_vecs
+    )
