@@ -195,7 +195,7 @@ def _occupied_orbitals(
     )
 
 
-def _scf_map(
+def _scf_step(
     dens: Array,
     guess_vecs: Array,
     h1: Array,
@@ -245,7 +245,7 @@ def _primal_scf_solve(
 
     def body(state: tuple[Array, ...]) -> tuple[Array, ...]:
         iteration, dens, guess, _, _, energy = state
-        mixed, orbitals, _, projector = _scf_map(
+        mixed, orbitals, _, projector = _scf_step(
             dens, guess, h1, v2_idx, v2_val, w3_idx, w3_val, config
         )
         next_energy = hf_energy_from_density(
@@ -318,6 +318,51 @@ def make_hf_solver(config: HFConfig) -> Callable:
         )
 
     return solve
+
+ 
+def solve_hf_unrolled(
+    h1: Array,
+    v2_idx: Array,
+    v2_val: Array,
+    w3_idx: Array | None,
+    w3_val: Array | None,
+    dens0: Array,
+    guess_vecs0: Array,
+    config: HFConfig,
+) -> HFResult:
+
+    @jax.checkpoint
+    def step(carry, _):
+        dens, guess = carry
+        mixed, orbitals, _, _ = _scf_step(
+            dens, guess, h1, v2_idx, v2_val, w3_idx, w3_val, config
+        )
+        return (mixed, orbitals), None
+
+    (dens, warm_orbitals), _ = jax.lax.scan(
+        step,
+        (hermitianize(dens0), guess_vecs0),
+        xs=None,
+        length=config.scf_max_iter,
+    )
+    fock = build_fock_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
+    orbital_energies, orbitals = _occupied_orbitals(
+        fock, warm_orbitals, config
+    )
+    projector = density_from_orbitals(orbitals)
+    residual = jnp.max(jnp.abs(projector - dens))
+    energy = hf_energy_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
+    return HFResult(
+        energy,
+        dens,
+        orbital_energies,
+        orbitals,
+        residual,
+        jnp.asarray(jnp.nan, dtype=energy.dtype),
+        jnp.asarray(config.scf_max_iter, dtype=jnp.int32),
+        residual <= config.density_tol,
+    )
+
 
  
 def validate_hf_result(
