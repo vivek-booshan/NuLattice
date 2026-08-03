@@ -238,9 +238,9 @@ def onePionEx(
         ob_ops.list_to_sparse1b(ob_ops.spin_z(lattice, myL)),
     ]
     iso_ops = [
-        ob_ops.list_to_sparse1b(ob_ops.tau_x(lattice, myL)),
-        ob_ops.list_to_sparse1b(ob_ops.tau_y(lattice, myL)),
-        ob_ops.list_to_sparse1b(ob_ops.tau_z(lattice, myL)),
+        ob_ops.tau_x(lattice, myL),
+        ob_ops.tau_y(lattice, myL),
+        ob_ops.tau_z(lattice, myL),
     ]
     for site in lattice:
         rho_sp = [None] * 3

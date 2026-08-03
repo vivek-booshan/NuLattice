@@ -57,7 +57,7 @@ if __name__ == "__main__":
             sNL,
             cINL,
             verbose=verbose,
-            op1b=obops.list_to_sparse1b(op),
+            op1b=op,
         )
 
     import jax

@@ -254,106 +254,213 @@ def x_k(my_basis, k):
         x.append([i, i, pos])
     return x
 
+def tau(lattice, myL, component, spin=2, isospin=2):
+    component = component.lower()
+    sites = np.asarray(lattice)
 
-def tau_x(lattice, myL, spin=2, isospin=2):
-    """
-    computes matrix elements for 1-body isospin-x operator.
+    basis_size = myL**3 * isospin * spin
+    internal_size = isospin * spin
 
-    :param lattice:     list of lattice sites returned by get_lattice
-    :type lattice:      list[(int, int, int)]
-    :param myL:         number of lattice sites in each direction
-    :type myL:          int
-    :param spin:        Optional; number of spin degrees of freedom
-    :type spinL:        int
-    :param isospin:     Optional; number of isospin degrees of freedom
-    :type isospin:      int
-    :return:            list of tuples [i, j, value] where i and j are indices in the single-particle
-                        basis, and value is the value of the matrix element Tij
-    :rtype:             list[(int, int, float)]
-    """
-    mat = []
-    for site in lattice:
-        i = site[0]
-        j = site[1]
-        k = site[2]
-        for tz in range(isospin):
-            tzp = 1 - tz
-            val = 0.5
-            for sz in range(spin):
-                state1 = [i, j, k, tz, sz]
-                indx1 = lat.state2index(state1, myL=myL, spin=spin, isospin=isospin)
-                state2 = [i, j, k, tzp, sz]
-                indx2 = lat.state2index(state2, myL=myL, spin=spin, isospin=isospin)
-                mat.append([indx2, indx1, val])
-    #
-    return mat
+    # Spatial contribution to the basis index, shape: (# sites, 1, 1)
+    site_base = (
+        ((sites[:, 0] * myL + sites[:, 1]) * myL + sites[:, 2])
+        * internal_size
+    )[:, None, None]
+
+    # Shapes are chosen so broadcasting produces:
+    # (# sites, iso, spin).
+    tz = np.arange(isospin, dtype=np.int64)[None, :, None]
+    sz = np.arange(spin, dtype=np.int64)[None, None, :]
+
+    # Column indices are input states
+    columns_3d = site_base + tz * spin + sz
+
+    if component == "z":
+        rows = columns_3d.ravel()
+        columns = rows
+
+        values = np.broadcast_to(
+            tz.astype(np.float64) - 0.5,
+            columns_3d.shape,
+        ).ravel()
+
+    else:
+        # tau_x and tau_y flip the two-state isospin index.
+        flipped_tz = 1 - tz
+        rows_3d = site_base + flipped_tz * spin + sz
+
+        rows = rows_3d.ravel()
+        columns = columns_3d.ravel()
+
+        if component == "x":
+            values = np.full(
+                columns.size,
+                0.5,
+                dtype=np.float64,
+            )
+        else:
+            # Preserves the sign convention in the original tau_y:
+            # tz=0 -> -0.5j
+            # tz=1 -> +0.5j
+            tz_values = np.where(tz == 0, -0.5j, 0.5j)
+
+            values = np.broadcast_to(
+                tz_values,
+                columns_3d.shape,
+            ).ravel()
+
+    operator = sparse.coo_array(
+        (values, (rows, columns)),
+        shape=(basis_size, basis_size),
+    )
+
+    return operator.tocsr()
+
+# def tau_x(lattice, myL, spin=2, isospin=2):
+#     """
+#     computes matrix elements for 1-body isospin-x operator.
+
+#     :param lattice:     list of lattice sites returned by get_lattice
+#     :type lattice:      list[(int, int, int)]
+#     :param myL:         number of lattice sites in each direction
+#     :type myL:          int
+#     :param spin:        Optional; number of spin degrees of freedom
+#     :type spinL:        int
+#     :param isospin:     Optional; number of isospin degrees of freedom
+#     :type isospin:      int
+#     :return:            list of tuples [i, j, value] where i and j are indices in the single-particle
+#                         basis, and value is the value of the matrix element Tij
+#     :rtype:             list[(int, int, float)]
+#     """
+#     mat = []
+#     for site in lattice:
+#         i = site[0]
+#         j = site[1]
+#         k = site[2]
+#         for tz in range(isospin):
+#             tzp = 1 - tz
+#             val = 0.5
+#             for sz in range(spin):
+#                 state1 = [i, j, k, tz, sz]
+#                 indx1 = lat.state2index(state1, myL=myL, spin=spin, isospin=isospin)
+#                 state2 = [i, j, k, tzp, sz]
+#                 indx2 = lat.state2index(state2, myL=myL, spin=spin, isospin=isospin)
+#                 mat.append([indx2, indx1, val])
+#     #
+#     return mat
 
 
-def tau_y(lattice, myL, spin=2, isospin=2):
-    """
-    computes matrix elements for 1-body isospin-y operator.
+# def tau_y(lattice, myL, spin=2, isospin=2):
+#     """
+#     computes matrix elements for 1-body isospin-y operator.
 
-    :param lattice:     list of lattice sites returned by get_lattice
-    :type lattice:      list[(int, int, int)]
-    :param myL:         number of lattice sites in each direction
-    :type myL:          int
-    :param spin:        Optional; number of spin degrees of freedom
-    :type spinL:        int
-    :param isospin:     Optional; number of isospin degrees of freedom
-    :type isospin:      int
-    :return:            list of tuples [i, j, value] where i and j are indices in the single-particle
-                        basis, and value is the value of the matrix element Tij
-    :rtype:             list[(int, int, complex)]
-    """
-    mat = []
-    for site in lattice:
-        i = site[0]
-        j = site[1]
-        k = site[2]
-        for tz in range(isospin):
-            sgn = np.sign(tz - 0.5)
-            tzp = 1 - tz
-            val = sgn * 0.5j
-            for sz in range(spin):
-                state1 = [i, j, k, tz, sz]
-                indx1 = lat.state2index(state1, myL=myL, spin=spin, isospin=isospin)
-                state2 = [i, j, k, tzp, sz]
-                indx2 = lat.state2index(state2, myL=myL, spin=spin, isospin=isospin)
-                mat.append([indx2, indx1, val])
-    #
-    return mat
+#     :param lattice:     list of lattice sites returned by get_lattice
+#     :type lattice:      list[(int, int, int)]
+#     :param myL:         number of lattice sites in each direction
+#     :type myL:          int
+#     :param spin:        Optional; number of spin degrees of freedom
+#     :type spinL:        int
+#     :param isospin:     Optional; number of isospin degrees of freedom
+#     :type isospin:      int
+#     :return:            list of tuples [i, j, value] where i and j are indices in the single-particle
+#                         basis, and value is the value of the matrix element Tij
+#     :rtype:             list[(int, int, complex)]
+#     """
+#     mat = []
+#     for site in lattice:
+#         i = site[0]
+#         j = site[1]
+#         k = site[2]
+#         for tz in range(isospin):
+#             sgn = np.sign(tz - 0.5)
+#             tzp = 1 - tz
+#             val = sgn * 0.5j
+#             for sz in range(spin):
+#                 state1 = [i, j, k, tz, sz]
+#                 indx1 = lat.state2index(state1, myL=myL, spin=spin, isospin=isospin)
+#                 state2 = [i, j, k, tzp, sz]
+#                 indx2 = lat.state2index(state2, myL=myL, spin=spin, isospin=isospin)
+#                 mat.append([indx2, indx1, val])
+#     #
+#     return mat
 
 
-def tau_z(lattice, myL, spin=2, isospin=2):
-    """
-    computes matrix elements for 1-body isospin-z operator.
+# def tau_z(lattice, myL, spin=2, isospin=2):
+#     """
+#     computes matrix elements for 1-body isospin-z operator.
 
-    :param lattice:     list of lattice sites returned by get_lattice
-    :type lattice:      list[(int, int, int)]
-    :param myL:         number of lattice sites in each direction
-    :type myL:          int
-    :param spin:        Optional; number of spin degrees of freedom
-    :type spinL:        int
-    :param isospin:     Optional; number of isospin degrees of freedom
-    :type isospin:      int
-    :return:            list of tuples [i, j, value] where i and j are indices in the single-particle
-                        basis, and value is the value of the matrix element Tij
-    :rtype:             list[(int, int, float)]
-    """
-    mat = []
-    for site in lattice:
-        i = site[0]
-        j = site[1]
-        k = site[2]
-        for tz in range(isospin):
-            val = tz - 0.5
-            for sz in range(spin):
-                state = [i, j, k, tz, sz]
-                indx = lat.state2index(state, myL=myL, spin=spin, isospin=isospin)
-                mat.append([indx, indx, val])
-    #
-    return mat
+#     :param lattice:     list of lattice sites returned by get_lattice
+#     :type lattice:      list[(int, int, int)]
+#     :param myL:         number of lattice sites in each direction
+#     :type myL:          int
+#     :param spin:        Optional; number of spin degrees of freedom
+#     :type spinL:        int
+#     :param isospin:     Optional; number of isospin degrees of freedom
+#     :type isospin:      int
+#     :return:            list of tuples [i, j, value] where i and j are indices in the single-particle
+#                         basis, and value is the value of the matrix element Tij
+#     :rtype:             list[(int, int, float)]
+#     """
+#     mat = []
+#     for site in lattice:
+#         i = site[0]
+#         j = site[1]
+#         k = site[2]
+#         for tz in range(isospin):
+#             val = tz - 0.5
+#             for sz in range(spin):
+#                 state = [i, j, k, tz, sz]
+#                 indx = lat.state2index(state, myL=myL, spin=spin, isospin=isospin)
+#                 mat.append([indx, indx, val])
+#     #
+#     return mat
 
+def tau_x(
+    lattice,
+    myL: int,
+    spin: int = 2,
+    isospin: int = 2,
+) -> sparse.csr_array:
+    """Construct the one-body isospin-x operator."""
+    return tau(
+        lattice,
+        myL,
+        component="x",
+        spin=spin,
+        isospin=isospin,
+    )
+
+
+def tau_y(
+    lattice,
+    myL: int,
+    spin: int = 2,
+    isospin: int = 2,
+) -> sparse.csr_array:
+    """Construct the one-body isospin-y operator."""
+    return tau(
+        lattice,
+        myL,
+        component="y",
+        spin=spin,
+        isospin=isospin,
+    )
+
+
+def tau_z(
+    lattice,
+    myL: int,
+    spin: int = 2,
+    isospin: int = 2,
+) -> sparse.csr_array:
+    """Construct the one-body isospin-z operator."""
+    return tau(
+        lattice,
+        myL,
+        component="z",
+        spin=spin,
+        isospin=isospin,
+    )
 
 def spin_x(lattice, myL, spin=2, isospin=2):
     """
@@ -467,16 +574,31 @@ def pauli_spin_z(lattice, myL, spin=2, isospin=2):
     return [(p, q, 2 * x) for p, q, x in spin_z(lattice, myL, spin, isospin)]
 
 
-def pauli_tau_x(lattice, myL, spin=2, isospin=2):
-    return [(p, q, 2 * x) for p, q, x in tau_x(lattice, myL, spin, isospin)]
+def pauli_tau_x(
+    lattice,
+    L: int,
+    spin: int = 2,
+    isospin: int = 2,
+) -> sparse.csr_array:
+    return 2 * tau_x(lattice, L, spin, isospin)
 
 
-def pauli_tau_y(lattice, myL, spin=2, isospin=2):
-    return [(p, q, 2 * x) for p, q, x in tau_y(lattice, myL, spin, isospin)]
+def pauli_tau_y(
+    lattice,
+    L: int,
+    spin: int = 2,
+    isospin: int = 2,
+) -> sparse.csr_array:
+    return 2 * tau_y(lattice, L, spin, isospin)
 
 
-def pauli_tau_z(lattice, myL, spin=2, isospin=2):
-    return [(p, q, 2 * x) for p, q, x in tau_z(lattice, myL, spin, isospin)]
+def pauli_tau_z(
+    lattice,
+    L: int,
+    spin: int = 2,
+    isospin: int = 2,
+) -> sparse.csr_array:
+    return 2 * tau_z(lattice, L, spin, isospin)
 
 
 def p_x(lattice, myL, spin=2, isospin=2):
