@@ -228,14 +228,15 @@ def test_unrolled_and_implicit_gradients_agree_after_convergence():
         atol=2.0e-5,
     )
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "native eigenvector VJPs divide by zero inside a degenerate occupied "
-        "block; the next patch differentiates the projector"
-    ),
-)
-def test_degenerate_occupied_subspace_exposes_native_eigenvector_nan():
+# @pytest.mark.xfail(
+#     strict=True,
+#     reason=(
+#         "native eigenvector VJPs divide by zero inside a degenerate occupied "
+#         "block; the next patch differentiates the projector"
+#     ),
+# )
+# def test_degenerate_occupied_subspace_exposes_native_eigenvector_nan():
+def test_degenerate_occupied_subspace_has_finite_projector():
     dtype = jnp.float32
     v2_idx, v2_val, w3_idx, w3_val = _empty_interactions(dtype)
     dens0 = jnp.diag(jnp.array([1.0, 1.0, 0.0, 0.0], dtype=dtype))

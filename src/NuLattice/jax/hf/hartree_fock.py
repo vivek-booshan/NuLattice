@@ -37,6 +37,10 @@ class HFConfig:
     gmres_restart: int = 8
     gmres_max_iter: int = 20
 
+    projector_response_tol: float = 1.0e-7
+    projector_response_restart: int = 8
+    projector_response_max_iter: int = 20
+
     def __post_init__(self) -> None:
         if self.npart <= 0:
             raise ValueError("npart must be positive")
@@ -60,7 +64,13 @@ class HFConfig:
             raise ValueError("adjoint_mix must lie in (0, 1]")
         if self.gmres_restart <= 0 or self.gmres_max_iter <= 0:
             raise ValueError("adjoint GMRES iteration limits must be positive")
-
+        if self.projector_response_tol < 0.0:
+            raise ValueError("projector_response_tol must be non-negative")
+        if (
+            self.projector_response_restart <= 0
+            or self.projector_response_max_iter <= 0
+        ):
+            raise ValueError("projector response iteration limits must be positive")
 
 class HFResult(NamedTuple):
     energy: Array
@@ -216,6 +226,81 @@ def _occupied_orbitals(
     )
 
 
+ 
+@lru_cache(maxsize=None)
+def _make_occupied_subspace_solver(config: HFConfig):
+
+
+   @jax.custom_vjp
+   def occupied_subspace(
+       fock: Array,
+       guess_vecs: Array,
+   ) -> tuple[Array, Array, Array]:
+       orbital_energies, orbitals = _occupied_orbitals(
+           fock, guess_vecs, config
+       )
+       projector = density_from_orbitals(orbitals)
+       return (
+           projector,
+           jax.lax.stop_gradient(orbital_energies),
+           jax.lax.stop_gradient(orbitals),
+       )
+
+
+   def occupied_subspace_fwd(fock: Array, guess_vecs: Array):
+       fock = hermitianize(fock)
+       orbital_energies, orbitals = _occupied_orbitals(
+           fock, guess_vecs, config
+       )
+       projector = density_from_orbitals(orbitals)
+       output = (
+           projector,
+           jax.lax.stop_gradient(orbital_energies),
+           jax.lax.stop_gradient(orbitals),
+       )
+       return output, (fock, orbital_energies, orbitals, guess_vecs)
+
+
+   def occupied_subspace_bwd(saved, output_cotangents):
+       fock, orbital_energies, orbitals, guess_vecs = saved
+       projector_bar = hermitianize(output_cotangents[0])
+       def occupied_action(x: Array) -> Array:
+           return orbitals @ (_adjoint(orbitals) @ x)
+       def virtual_action(x: Array) -> Array:
+           return x - occupied_action(x)
+       # For each occupied orbital i solve
+       #   Q (F - eps_i) Q z_i = Q G u_i.
+       # The projector pullback is F_bar = -(Z U^H + U Z^H).
+       rhs = virtual_action(projector_bar @ orbitals)
+       def response_operator(x: Array) -> Array:
+           virtual_x = virtual_action(x)
+           shifted = fock @ virtual_x - virtual_x * orbital_energies[None, :]
+           # P x acts as an identity on the null space without changing the
+           # desired virtual solution because rhs is purely virtual.
+           return virtual_action(shifted) + occupied_action(x)
+
+
+       response, _ = gmres(
+           response_operator,
+           rhs,
+           tol=config.projector_response_tol,
+           atol=0.0,
+           restart=config.projector_response_restart,
+           maxiter=config.projector_response_max_iter,
+           solve_method="batched",
+       )
+       fock_bar = -hermitianize(
+           response @ _adjoint(orbitals)
+           + orbitals @ _adjoint(response)
+       )
+
+       return fock_bar, jnp.zeros_like(guess_vecs)
+
+   occupied_subspace.defvjp(occupied_subspace_fwd, occupied_subspace_bwd)
+
+   return occupied_subspace
+
+
 def _scf_step(
     dens: Array,
     guess_vecs: Array,
@@ -228,8 +313,7 @@ def _scf_step(
 ) -> tuple[Array, Array, Array, Array]:
     """Apply one mixed occupied-projector update."""
     fock = build_fock_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
-    orbital_energies, orbitals = _occupied_orbitals(fock, guess_vecs, config)
-    projector = density_from_orbitals(orbitals)
+    projector, orbital_energies, orbitals = _make_occupied_subspace_solver(config)(fock, guess_vecs)
     mixed = hermitianize((1.0 - config.mix) * dens + config.mix * projector)
     return mixed, orbitals, orbital_energies, projector
 
@@ -296,8 +380,7 @@ def _primal_scf_solve(
     )
 
     fock = build_fock_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
-    orbital_energies, orbitals = _occupied_orbitals(fock, warm_orbitals, config)
-    projector = density_from_orbitals(orbitals)
+    projector, orbital_energies, orbitals = _make_occupied_subspace_solver(config)(fock, warm_orbitals)
     residual = jnp.max(jnp.abs(projector - dens))
     energy = hf_energy_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
     converged = jnp.logical_and(
@@ -367,10 +450,7 @@ def solve_hf_unrolled(
         length=config.scf_max_iter,
     )
     fock = build_fock_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
-    orbital_energies, orbitals = _occupied_orbitals(
-        fock, warm_orbitals, config
-    )
-    projector = density_from_orbitals(orbitals)
+    projector, orbital_energies, orbitals = _make_occupied_subspace_solver(config)(fock, warm_orbitals)
     residual = jnp.max(jnp.abs(projector - dens))
     energy = hf_energy_from_density(dens, h1, v2_idx, v2_val, w3_idx, w3_val)
     return HFResult(
@@ -671,10 +751,7 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
         fock = build_fock_from_density(
             dens, h1, v2_idx, v2_val, w3_idx, w3_val
         )
-        orbital_energies, orbitals = _occupied_orbitals(
-            fock, jax.lax.stop_gradient(warm_orbitals), config
-        )
-        projector = density_from_orbitals(orbitals)
+        projector, orbital_energies, orbitals = _make_occupied_subspace_solver(config)(fock, jax.lax.stop_gradient(warm_orbitals))
         residual = jnp.max(jnp.abs(projector - dens))
         energy = hf_energy_from_density(
             dens, h1, v2_idx, v2_val, w3_idx, w3_val
