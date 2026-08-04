@@ -5,13 +5,16 @@ import jax.numpy as jnp
 
 Array = jax.Array
 
+DIVISION_BY_ZERO_THRESHOLD = 1e-12
+SHIFT_REGULARIZATION = 1e-20 # below fp64 machine precision
+
 def _adjoint(x):
     return jnp.swapaxes(jnp.conj(x), -1, -2)
 
 def hermitianize(x):
     return 0.5 * (x + _adjoint(x))
 
-def _occupied_orbitals(fock: Array, npart, guess: Array, max_iter: float = 4) -> tuple[Array, Array]:
+def _occupied_orbitals(fock: Array, npart, guess: Array, max_iter: float) -> tuple[Array, Array]:
     orbital_energies, orbitals = davidson_eigh(fock, npart, guess, max_iter)
     return orbital_energies[:npart], orbitals[:, :npart]
 
@@ -22,13 +25,17 @@ def density_from_orbitals(orbitals: Array) -> Array:
 def _local_orthonormalize(V):
     # Compute the small overlap matrix (2k x 2k).
     S = jnp.dot(_adjoint(V), V)  # calls (cheap) AllReduce on mesh
-    S += 1e-11 * jnp.eye(S.shape[0], dtype=S.dtype)
+    S += SHIFT_REGULARIZATION * jnp.eye(S.shape[0], dtype=S.dtype)
     L = jnp.linalg.cholesky(S)
     L_inv = jnp.linalg.inv(L)
     return jnp.dot(V, _adjoint(L_inv))
 
+@jax.jit
+def _cqr2(V):
+    return _local_orthonormalize(_local_orthonormalize(V))
+
 @partial(jax.jit, static_argnames=("npart", ))
-def davidson_eigh(H, npart, guess_vecs, max_iter=10):
+def davidson_eigh(H, npart, guess_vecs, max_iter):
     """
     Finds the lowest `npart` eigenvalues/eigenvectors of a sharded dense Hamiltonian H.
 
@@ -46,7 +53,7 @@ def davidson_eigh(H, npart, guess_vecs, max_iter=10):
     # Initialize a static subspace V of size (nstat, 2 * npart)
     V = jnp.zeros((nstat, 2 * npart), dtype=H.dtype)
     V = V.at[:, :npart].set(guess_vecs)
-    V = _local_orthonormalize(V)
+    V = _cqr2(V)
 
     def body_fun(i, state):
         V_sub, _ = state
@@ -73,7 +80,7 @@ def davidson_eigh(H, npart, guess_vecs, max_iter=10):
 
         # Collapse and expand the subspace statically
         V_next = jnp.concatenate([X, Y], axis=1)
-        V_next = _local_orthonormalize(V_next)
+        V_next = _cqr2(V_next)
 
         return V_next, best_vals
 
