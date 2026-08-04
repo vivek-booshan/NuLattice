@@ -4,7 +4,7 @@ import NuLattice.jax.lattice as lat
 import NuLattice.jax.operators.one_body_operators as obops
 import NuLattice.jax.operators.two_body_operators as tbops
 from NuLattice.utils.constants import ReferenceState as Rs
-from NuLattice.utils.constants import MASS, G_A, F_PI, M_PI_0, ReferenceState as Rs
+from NuLattice.utils.constants import MASS, G_A, F_PI, M_PI_0
 
 
 BENCHMARK_ENERGY_MEV = -92.91408870324845
