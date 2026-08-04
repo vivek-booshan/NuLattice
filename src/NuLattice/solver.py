@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from NuLattice.utils import ReferenceState
+from NuLattice.utils._jax_types import ShardingManager
 
 
 # TODO: delete this?
@@ -196,11 +197,14 @@ class CCMSolver(BaseSolver):
 class HFSolver(BaseSolver):
     def solve(
         self,
+        *,
         eps: float = 1e-8,
         mix: float = 0.7,
-        max_iter: float = 100,
-        verbose: float = False,
-        sm=None,
+        max_iter: int = 100,
+        davidson_max_iter: int = 10,
+        verbose: bool = False,
+        sm: ShardingManager = None,
+        diagonalizer="davidson"
     ):
         if self.backend == "cpu":
             import NuLattice.cpu.hf.hartree_fock as hf
@@ -215,8 +219,6 @@ class HFSolver(BaseSolver):
 
         if self.backend == "jax":
             energy, vecs, conv = hf.solve_HF(
-                self.L,
-                self.a_lat,
                 self.op1,
                 self.op2,
                 self.op3,
@@ -226,6 +228,8 @@ class HFSolver(BaseSolver):
                 max_iter=max_iter,
                 verbose=verbose,
                 sm=sm,
+                diagonalizer=diagonalizer,
+                davidson_max_iter=davidson_max_iter,
             )
         else:
             energy, vecs, conv = hf.solve_HF(

@@ -20,11 +20,13 @@ def parse():
     parser.add_argument("--eps", type=float, default=1e-8, help="Convergence threshold")
     parser.add_argument("--mix", type=float, default=0.7, help="Mixing parameter for density iterations")
     parser.add_argument("--max_iter", type=int, default=100, help="Maximum HF iterations")
+    parser.add_argument("--davidson_max_iter", type=int, default=10, help="Maximum davidson iterations")
     parser.add_argument("--quiet", action="store_false", dest="verbose", default=True, help="Suppress iteration output")
     parser.add_argument("--reference", type=str, default="O16", 
                         help="Reference state key (e.g., O16, C12, HE4)")
     parser.add_argument("--backend", type=str, default="cpu", help="backend")
     parser.add_argument("--shard", action="store_true", default=False, help="Enable JAX sharding")
+    parser.add_argument("--diagonalizer", type=str, default="davidson", help="Use the dense solver")
 
     args = parser.parse_args()
     return args
@@ -55,16 +57,16 @@ def main():
 
     solver = HFSolver(args.L, args.a_lat, ref_state, args.vT1, args.vS1, args.cE, backend=args.backend)
 
-    # start = time.perf_counter()
-    # erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, verbose=False, chef=None)
-    # end = time.perf_counter()
-    # print("cold start:", end - start)
+    start = time.perf_counter()
+    erg, trafo, conv = solver.solve(eps=args.eps, mix=args.mix, max_iter=args.max_iter, davidson_max_iter=args.davidson_max_iter, verbose=False, sm=sm, diagonalizer=args.diagonalizer)
+    end = time.perf_counter()
+    print("cold start:", end - start)
     
     if args.backend == "cpu":
         tracemalloc.start()
 
     start = time.perf_counter()
-    erg, trafo, conv = solver.solve(args.eps, args.mix, args.max_iter, args.verbose, sm=sm)
+    erg, trafo, conv = solver.solve(eps=args.eps, mix=args.mix, max_iter=args.max_iter, davidson_max_iter=args.davidson_max_iter, verbose=args.verbose, sm=sm, diagonalizer=args.diagonalizer)
     end = time.perf_counter()
     print("warm start:", end - start)
 

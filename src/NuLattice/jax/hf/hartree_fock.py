@@ -95,10 +95,10 @@ def init_density(nstat: int, hole: Tuple[int], dtype=None):
     dens = dens.at[hole_indices, hole_indices].set(1.0)
     return dens
 
-@partial(jax.jit, static_argnames=("npart", "diagonalizer"))
+@partial(jax.jit, static_argnames=("npart", "diagonalizer", "davidson_max_iter"))
 def _scf_step(
     dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs,
-    diagonalizer,
+    diagonalizer, davidson_max_iter
 ):
     gamma, omega = build_mean_fields(dens, v2_idx, v2_val, w3_idx, w3_val)
     fock = build_fock(h1, gamma, omega)
@@ -108,7 +108,7 @@ def _scf_step(
         _, orbitals = jnp.linalg.eigh(fock)
         occ = orbitals[:, :npart]
     else:
-        _, occ = _occupied_orbitals(fock, npart, prev_vecs)
+        _, occ = _occupied_orbitals(fock, npart, prev_vecs, davidson_max_iter)
 
     new_density = occ @ _adjoint(occ)
 
@@ -147,8 +147,6 @@ def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager, dtype=jnp.float64):
     return h1, v2_idx, v2_val, w3_idx, w3_val, dens
 
 def solve_HF(
-    L,
-    a_lat,
     op1,
     op2,
     op3,
@@ -156,6 +154,7 @@ def solve_HF(
     mix=0.5,
     eps=1e-8,
     max_iter=100,
+    davidson_max_iter=10,
     verbose=False,
     sm: ShardingManager = None,
     diagonalizer="davidson",
@@ -177,7 +176,7 @@ def solve_HF(
     for i in range(max_iter):
         occ, energy, _dens, diff_dens = _scf_step(
             _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, occ,
-            diagonalizer,
+            diagonalizer, davidson_max_iter,
         )
 
         dE = jnp.abs(energy - prev_energy)
@@ -186,7 +185,8 @@ def solve_HF(
             # convert to jax debug logging
             print(f"Iter {i}: E={energy:.8f}, dE={dE:.6e}, dRho={diff_dens:.6e}")
 
-        if (diff_dens < eps or dE < eps) and i > 1:
+        # if (diff_dens < eps or dE < eps) and i > 1:
+        if (diff_dens < eps):
             converged = True
             break
 
