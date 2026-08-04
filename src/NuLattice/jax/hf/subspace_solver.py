@@ -6,12 +6,12 @@ import jax.numpy as jnp
 Array = jax.Array
 
 DIVISION_BY_ZERO_THRESHOLD = 1e-12
-SHIFT_REGULARIZATION = 1e-20 # below fp64 machine precision
+SHIFT_REGULARIZATION = 1e-12
 
-def _adjoint(x):
+def _adjoint(x: Array) -> Array:
     return jnp.swapaxes(jnp.conj(x), -1, -2)
 
-def hermitianize(x):
+def hermitianize(x: Array) -> Array:
     return 0.5 * (x + _adjoint(x))
 
 def _occupied_orbitals(fock: Array, npart, guess: Array, max_iter: float) -> tuple[Array, Array]:
@@ -22,7 +22,7 @@ def density_from_orbitals(orbitals: Array) -> Array:
     return hermitianize(orbitals @ _adjoint(orbitals))
 
 @jax.jit
-def _local_orthonormalize(V):
+def _local_orthonormalize(V: Array) -> Array:
     # Compute the small overlap matrix (2k x 2k).
     S = jnp.dot(_adjoint(V), V)  # calls (cheap) AllReduce on mesh
     S += SHIFT_REGULARIZATION * jnp.eye(S.shape[0], dtype=S.dtype)
@@ -31,11 +31,11 @@ def _local_orthonormalize(V):
     return jnp.dot(V, _adjoint(L_inv))
 
 @jax.jit
-def _cqr2(V):
+def _cqr2(V: Array) -> Array:
     return _local_orthonormalize(_local_orthonormalize(V))
 
-@partial(jax.jit, static_argnames=("npart", ))
-def davidson_eigh(H, npart, guess_vecs, max_iter):
+@partial(jax.jit, static_argnames=("npart",))
+def davidson_eigh(H: Array, npart: int, guess_vecs: Array, max_iter: int):
     """
     Finds the lowest `npart` eigenvalues/eigenvectors of a sharded dense Hamiltonian H.
 
@@ -73,12 +73,10 @@ def davidson_eigh(H, npart, guess_vecs, max_iter):
         R = HX - X * best_vals[None, :]
 
         # preconditioner: (D - energy)^{-1} * R
-        DIVISION_BY_ZERO_THRESHOLD = 1e-5
         denom = D[:, None] - best_vals[None, :]
         denom = jnp.where(jnp.abs(denom) < DIVISION_BY_ZERO_THRESHOLD, DIVISION_BY_ZERO_THRESHOLD, denom)
         Y = R / denom
 
-        # Collapse and expand the subspace statically
         V_next = jnp.concatenate([X, Y], axis=1)
         V_next = _cqr2(V_next)
 
