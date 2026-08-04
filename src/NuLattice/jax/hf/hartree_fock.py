@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Tuple
+from typing import Tuple, Literal
 
 import jax
 import jax.numpy as jnp
@@ -9,12 +9,19 @@ from NuLattice.utils._jax_types import ShardingManager
 from .subspace_solver import _occupied_orbitals
 
 Array = jax.Array
+EigenSolver = Literal["dense", "davidson"]
 
 def _adjoint(x):
     return jnp.swapaxes(jnp.conj(x), -1, -2)
 
 def hermitianize(x):
     return 0.5 * (x + _adjoint(x))
+
+def init_density(nstat: int, hole: Tuple[int], dtype=None):
+    dens = jnp.zeros((nstat, nstat), dtype=dtype)
+    hole_indices = jnp.array(hole)
+    dens = dens.at[hole_indices, hole_indices].set(1.0)
+    return dens
 
 @jax.jit
 def contract_2nf_fused(indices: Array, values: Array, dens: Array) -> Array:
@@ -89,13 +96,9 @@ def hf_energy(
         e_omega = jnp.einsum("ij,ji->", omega, dens)
     return jnp.real(e_h1 + 0.5 * e_gamma + (1.0 / 6.0) * e_omega)
 
-def init_density(nstat: int, hole: Tuple[int], dtype=None):
-    dens = jnp.zeros((nstat, nstat), dtype=dtype)
-    hole_indices = jnp.array(hole)
-    dens = dens.at[hole_indices, hole_indices].set(1.0)
-    return dens
 
-@partial(jax.jit, static_argnames=("npart", "diagonalizer", "davidson_max_iter"))
+
+@partial(jax.jit, static_argnames=("npart", "diagonalizer", ))
 def _scf_step(
     dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs,
     diagonalizer, davidson_max_iter
@@ -117,7 +120,7 @@ def _scf_step(
 
     return occ, energy, mixed_density, residual_density
 
-def prepare_inputs(op1, op2, op3, dens, sm: ShardingManager, dtype=jnp.float64):
+def prepare_inputs(op1, op2, op3, dens: Array, sm: ShardingManager, dtype=jnp.float64):
     has_three_body = op3 is not None and len(op3) > 0
 
     if sm is not None:
@@ -150,14 +153,14 @@ def solve_HF(
     op1,
     op2,
     op3,
-    dens,
-    mix=0.5,
-    eps=1e-8,
-    max_iter=100,
-    davidson_max_iter=10,
-    verbose=False,
+    dens: Array,
+    mix: float =0.5,
+    eps: float =1e-8,
+    max_iter: int = 100,
+    davidson_max_iter: int = 10,
+    verbose: bool = False,
     sm: ShardingManager = None,
-    diagonalizer="davidson",
+    diagonalizer: EigenSolver = "davidson",
 ):
 
     if diagonalizer not in {"davidson", "dense"}:
@@ -182,7 +185,6 @@ def solve_HF(
         dE = jnp.abs(energy - prev_energy)
 
         if verbose:
-            # convert to jax debug logging
             print(f"Iter {i}: E={energy:.8f}, dE={dE:.6e}, dRho={diff_dens:.6e}")
 
         # if (diff_dens < eps or dE < eps) and i > 1:
