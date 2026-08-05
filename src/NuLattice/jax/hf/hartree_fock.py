@@ -24,10 +24,15 @@ class HFConfig:
     mix: float = 0.5
     density_tol: float = 1.0e-8
     energy_tol: float = 1.0e-8
+    verbose: bool = False
+
     scf_max_iter: int = 100
+
     eigensolver: EigenSolver = "davidson"
     davidson_max_iter: int = 10
-    verbose: bool = False
+    davidson_subspace_factor: int = 2
+    davidson_shift_regularization: float = 1.0e-12
+
 
     adjoint_solver: AdjointSolver = "fixed_point"
     adjoint_mix: float = 1.0
@@ -54,6 +59,10 @@ class HFConfig:
             raise ValueError(f"unknown eigensolver: {self.eigensolver}")
         if self.davidson_max_iter <= 0:
             raise ValueError("davidson_max_iter must be positive")
+        if self.davidson_subspace_factor != 2: # hardcode
+            raise ValueError("fixed at 2*npart and should not be changed")
+        if self.davidson_shift_regularization <= 0.0: # hardcode
+            raise ValueError("davidson_diag_shift must be positive")
         if self.adjoint_solver not in ("fixed_point", "gmres"):
             raise ValueError(f"unknown adjoint solver: {self.adjoint_solver}")
         if self.adjoint_tol < 0.0:
