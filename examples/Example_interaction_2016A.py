@@ -11,22 +11,23 @@ BENCHMARK_ENERGY_MEV = -92.91408870324845
 
 
 if __name__ == "__main__":
-    thisL = 4
+    L = 4
+    assert L == 4, "benchmark fixed to L = 4"
     a = 1.0 / 100.0
-    my_basis = lat.get_sp_basis(thisL)
-    lattice = lat.get_lattice(thisL)
+    my_basis = lat.get_sp_basis(L)
+    lattice = lat.get_lattice(L)
     nstat = len(my_basis)
 
     # Build the legacy NumPy/SciPy interactions before importing JAX.  The
     # interaction routines use multiprocessing, while JAX starts worker
     # threads during import.
-    tkin_list = obops.tKin(thisL, 3, a, mass=MASS)
+    tkin_list = obops.tKin(L, 3, a, mass=MASS)
     print("number of matrix elements from kinetic energy", len(tkin_list))
 
     bpi = 0.7
     verbose = True
     v_OPE = tbops.onePionEx(
-        thisL,
+        L,
         bpi,
         a,
         lattice,
@@ -41,18 +42,18 @@ if __name__ == "__main__":
     cINL = 0.02184 / a
     sL = 0
     v_NL = tbops.shortRangeV_2body(
-        lattice, thisL, sL, sNL, cNL, verbose=verbose
+        lattice, L, sL, sNL, cNL, verbose=verbose
     )
 
     iso_ops = [
-        obops.pauli_tau_x(lattice, thisL),
-        obops.pauli_tau_y(lattice, thisL),
-        obops.pauli_tau_z(lattice, thisL),
+        obops.pauli_tau_x(lattice, L),
+        obops.pauli_tau_y(lattice, L),
+        obops.pauli_tau_z(lattice, L),
     ]
     for op in iso_ops:
         v_NL += tbops.shortRangeV_2body(
             lattice,
-            thisL,
+            L,
             sL,
             sNL,
             cINL,
@@ -81,8 +82,6 @@ if __name__ == "__main__":
     dens = hf.init_density(nstat, hole, dtype=jnp.complex128)
 
     erg, trafo, conv = hf.solve_HF(
-        thisL,
-        a,
         myTkin,
         my_VNN,
         no_three_body,
