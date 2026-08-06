@@ -21,75 +21,105 @@ def _occupied_orbitals(fock: Array, npart, guess: Array, max_iter: float = 4) ->
 def density_from_orbitals(orbitals: Array) -> Array:
     return hermitianize(orbitals @ _adjoint(orbitals))
 
-@jax.jit
-def _local_orthonormalize(V: Array) -> Array:
-    # Compute the small overlap matrix (2k x 2k).
-    S = jnp.dot(_adjoint(V), V)  # calls (cheap) AllReduce on mesh
-    S += SHIFT_REGULARIZATION * jnp.eye(S.shape[0], dtype=S.dtype)
-    L = jnp.linalg.cholesky(S)
-    L_inv = jnp.linalg.inv(L)
-    return jnp.dot(V, _adjoint(L_inv))
 
-@jax.jit
-def _cqr2(V: Array) -> Array:
-    return _local_orthonormalize(_local_orthonormalize(V))
+def _deterministic_block(n: int, k: int, dtype: jnp.dtype) -> Array:
+    """deterministic seed directions"""
+    real_dtype = jnp.empty((), dtype=dtype).real.dtype
+    rows = jnp.arange(n, dtype=real_dtype)[:, None] + 1.0
+    cols = jnp.arange(k, dtype=real_dtype)[None, :] + 1.0
+    block = jnp.sin(rows * cols * 0.731) + jnp.cos(
+        rows * (cols + 1.0) * 0.193
+    )
+    return block.astype(dtype)
 
-@partial(jax.jit, static_argnames=("npart", ))
-def davidson_eigh(H: Array, npart: int, guess_vecs: Array, max_iter: int = 10):
-    """
-    Finds the lowest `npart` eigenvalues/eigenvectors of a sharded dense Hamiltonian H.
 
-    Args:
-        H: Sharded Hamiltonian matrix of shape (nstat, nstat)
-        npart: Number of occupied states (lowest roots needed)
-        guess_vecs: Initial guess vectors of shape (nstat, npart) from previous SCF step
-        max_iter: Number of subspace expansion steps (try 3-5 for warm starts)
+def _thin_qr(x: Array) -> Array:
+    q, _ = jnp.linalg.qr(x, mode="reduced")
+    return q
 
-    Frankensteined from https://joshuagoings.com/2013/08/23/davidsons-method/
-    """
-    nstat = H.shape[0]
-    D = jnp.diag(H) # Extract diagonal for the preconditioner
 
-    # Initialize a static subspace V of size (nstat, 2 * npart)
-    V = jnp.zeros((nstat, 2 * npart), dtype=H.dtype)
-    V = V.at[:, :npart].set(guess_vecs)
-    V = _cqr2(V)
+def _initial_davidson_basis(guess_vecs: Array) -> Array:
+    """fill full-rank 2*k search basis with occupied guess"""
+    n, k = guess_vecs.shape
+    seed = _deterministic_block(n, k, guess_vecs.dtype)
 
-    def body_fun(i, state):
-        V_sub, _ = state
+    # orthonormalized guess
+    q0 = _thin_qr(guess_vecs + 1.0e-7 * seed)
 
-        # Project into subspace: M = VT H V -> (2k, 2k)
-        HV = jnp.dot(H, V_sub)
-        M = jnp.dot(_adjoint(V_sub), HV)
+    # remove occupied component
+    seed_perp = seed - q0 @ (_adjoint(q0) @ seed)
 
-        # local eigen solution
-        vals, evecs = jnp.linalg.eigh(M)
+    # orthogonal complement
+    q1 = _thin_qr(seed_perp + 1.0e-7 * jnp.roll(seed, 1, axis=0))
+    return jnp.concatenate((q0, q1), axis=1)
 
-        best_vals = vals[:npart]
-        best_evecs = evecs[:, :npart]
 
-        X = jnp.dot(V_sub, best_evecs)
-        HX = jnp.dot(H, X)
-        R = HX - X * best_vals[None, :]
+def _regularize_denominator(denom: Array, shift: float) -> Array:
+    """Bound small Davidson denominators without reversing their sign."""
+    signed_shift = jnp.where(denom >= 0.0, shift, -shift)
+    return jnp.where(jnp.abs(denom) < shift, signed_shift, denom)
 
-        # preconditioner: (D - energy)^{-1} * R
-        denom = D[:, None] - best_vals[None, :]
-        denom = jnp.where(jnp.abs(denom) < DIVISION_BY_ZERO_THRESHOLD, DIVISION_BY_ZERO_THRESHOLD, denom)
-        Y = R / denom
 
-        # Collapse and expand the subspace statically
-        V_next = jnp.concatenate([X, Y], axis=1)
-        V_next = _cqr2(V_next)
+@partial(jax.jit, static_argnames=("npart", "max_iter"))
+def davidson_eigh(
+    hamiltonian: Array,
+    npart: int,
+    guess_vecs: Array,
+    *,
+    max_iter: int = 10,
+    diag_shift: float = SHIFT_REGULARIZATION,
+) -> tuple[Array, Array]:
+    """Return the lowest ``npart`` Ritz pairs in a static 2*k subspace."""
 
-        return V_next, best_vals
+    hamiltonian = hermitianize(hamiltonian)
+    diagonal = jnp.real(jnp.diag(hamiltonian))
+    guess_vecs = guess_vecs.astype(hamiltonian.dtype)
+    basis0 = _initial_davidson_basis(guess_vecs)
 
-    # Run fixed-iteration loop to avoid dynamic compilation tracing
-    initial_vals = jnp.zeros((npart,), dtype=jnp.real(H).dtype)
-    final_V, final_vals = jax.lax.fori_loop(0, max_iter, body_fun, (V, initial_vals))
+    @jax.checkpoint
+    def body(_: int, basis: Array) -> Array:
+        hb = hamiltonian @ basis
+        projected = hermitianize(_adjoint(basis) @ hb)
+        vals, coeff = jnp.linalg.eigh(projected)
+        x = basis @ coeff[:, :npart]
+        x = _thin_qr(x)
 
-    # Final extraction of the converged vectors
-    final_M = jnp.dot(_adjoint(final_V), jnp.dot(H, final_V))
-    _, final_evecs = jnp.linalg.eigh(final_M)
-    vecs_out = jnp.dot(final_V, final_evecs[:, :npart])
+        hx = hamiltonian @ x
+        rayleigh = jnp.real(jnp.sum(jnp.conj(x) * hx, axis=0))
+        residual = hx - x * rayleigh[None, :]
 
-    return final_vals, vecs_out
+        denom = diagonal[:, None] - rayleigh[None, :]
+        denom = _regularize_denominator(denom, diag_shift)
+        correction = -residual / denom
+
+        # Remove the occupied component.  A tiny deterministic virtual fallback
+        # keeps QR well-defined once the true residual has converged to zero.
+        correction -= x @ (_adjoint(x) @ correction)
+        correction = correction
+        qcorr = _thin_qr(correction)
+        return jnp.concatenate((x, qcorr), axis=1)
+
+    basis = jax.lax.fori_loop(0, max_iter, body, basis0)
+    projected = hermitianize(_adjoint(basis) @ (hamiltonian @ basis))
+    _, coeff = jnp.linalg.eigh(projected)
+    orbitals = _thin_qr(basis @ coeff[:, :npart])
+    orbital_energies = jnp.real(
+        jnp.sum(jnp.conj(orbitals) * (hamiltonian @ orbitals), axis=0)
+    )
+    order = jnp.argsort(orbital_energies)
+    return orbital_energies[order], orbitals[:, order]
+
+def _occupied_orbitals(
+    fock: Array,
+    npart: int,
+    guess: Array,
+    max_iter: int = 4,
+    diag_shift: float = SHIFT_REGULARIZATION,
+) -> tuple[Array, Array]:
+    return davidson_eigh(
+        fock,
+        npart,
+        guess,
+        max_iter=max_iter,
+        diag_shift=diag_shift,
+    )
