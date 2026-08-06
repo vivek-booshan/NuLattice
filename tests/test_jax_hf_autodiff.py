@@ -272,3 +272,63 @@ def test_degenerate_occupied_subspace_has_finite_projector():
     derivative = jax.grad(density_element)(jnp.asarray(0.0, dtype=dtype))
     assert jnp.isfinite(derivative)
     assert jnp.allclose(derivative, -0.5, rtol=2.0e-5, atol=2.0e-5)
+
+
+def test_implicit_density_gradient_is_independent_of_primal_mixing():
+    dtype = jnp.float32
+    h1 = jnp.array(
+        [
+            [-1.2, 0.08, 0.02, 0.00],
+            [0.08, -0.7, 0.03, 0.01],
+            [0.02, 0.03, 0.4, 0.04],
+            [0.00, 0.01, 0.04, 0.9],
+        ],
+        dtype=dtype,
+    )
+    v2_idx = jnp.array(
+        [
+            [0, 1, 0, 1],
+            [0, 2, 0, 2],
+            [1, 2, 1, 2],
+            [1, 3, 1, 3],
+        ],
+        dtype=jnp.int32,
+    )
+    v2_val = jnp.array([0.12, -0.04, 0.06, 0.03], dtype=dtype)
+    _, _, w3_idx, w3_val = _empty_interactions(dtype)
+    dens0 = jnp.diag(jnp.array([1.0, 1.0, 0.0, 0.0], dtype=dtype))
+    guess0 = orbitals_from_diagonal_density(dens0, 2)
+
+    def derivative_for_mix(mix):
+        from NuLattice.jax.hf.hartree_fock import make_implicit_hf_solver
+
+        config = HFConfig(
+            npart=2,
+            mix=mix,
+            density_tol=2.0e-6,
+            energy_tol=2.0e-6,
+            scf_max_iter=200,
+            eigensolver="dense",
+            adjoint_tol=2.0e-6,
+            adjoint_max_iter=300,
+        )
+        solve = make_implicit_hf_solver(config)
+
+        def density_element(scale):
+            result = solve(
+                h1,
+                v2_idx,
+                scale * v2_val,
+                w3_idx,
+                w3_val,
+                dens0,
+                guess0,
+            )
+            return result.density[0, 2]
+
+        return jax.grad(density_element)(jnp.asarray(1.0, dtype=dtype))
+
+    slow_mix = derivative_for_mix(0.2)
+    fast_mix = derivative_for_mix(0.8)
+    assert jnp.allclose(slow_mix, fast_mix, rtol=5.0e-5, atol=5.0e-7)
+
