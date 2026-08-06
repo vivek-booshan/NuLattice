@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal, NamedTuple, Tuple, Callable, Optional
@@ -16,7 +17,6 @@ from .subspace_solver import (
 Array = jax.Array
 EigenSolver = Literal["dense", "davidson"]
 AdjointSolver = Literal["fixed_point", "gmres"]
-
 
 @dataclass(frozen=True)
 class HFConfig:
@@ -81,6 +81,18 @@ class HFConfig:
         ):
             raise ValueError("projector response iteration limits must be positive")
 
+        machine_epsilon = _get_machine_epsilon()
+        if self.energy_tol < machine_epsilon:
+            raise Warning("energy tolerance below machine epsilon.")
+        if self.density_tol < machine_epsilon:
+            raise Warning("density tolerance below machine epsilon.")
+        if self.adjoint_tol < machine_epsilon:
+            raise Warning("adjoint tolerance below machine epsilon.")
+        if self.projector_response_tol < machine_epsilon:
+            raise Warning("projector_response tolerance below machine epsilon.")
+        if self.davidson_shift_regularization < machine_epsilon:
+            raise Warning("davidson shift regularization below machine epsilon.")
+
 class HFResult(NamedTuple):
     energy: Array
     density: Array
@@ -99,6 +111,11 @@ class HFValidation(NamedTuple):
     orbital_residual: Array
     energy_recomputed: Array
     energy_error: Array
+
+def _get_machine_epsilon():
+    dtype: jnp.dtype = jnp.float64 if os.getenv("JAX_ENABLE_X64") else jnp.float32
+    epsilon: float = float(jnp.finfo(dtype).eps)
+    return epsilon
 
 def _adjoint(x: Array) -> Array:
     return jnp.swapaxes(jnp.conj(x), -1, -2)
