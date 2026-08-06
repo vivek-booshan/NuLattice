@@ -124,6 +124,26 @@ def _adjoint(x: Array) -> Array:
 def hermitianize(x: Array) -> Array:
     return 0.5 * (x + _adjoint(x))
 
+def _promote_hf_float_inputs(
+    h1: Array,
+    v2_val: Array,
+    w3_val: Array | None,
+    dens: Array,
+    guess_vecs: Array,
+) -> tuple[Array, Array, Array | None, Array, Array]:
+    """Promote floating inputs before entering compiled loop carries."""
+    dtypes = [h1.dtype, v2_val.dtype, dens.dtype, guess_vecs.dtype]
+    if w3_val is not None:
+        dtypes.append(w3_val.dtype)
+    dtype = jnp.result_type(*dtypes)
+    return (
+        h1.astype(dtype),
+        v2_val.astype(dtype),
+        None if w3_val is None else w3_val.astype(dtype),
+        dens.astype(dtype),
+        guess_vecs.astype(dtype),
+    )
+
 
 @jax.jit
 def contract_2nf_fused(indices: Array, values: Array, dens: Array) -> Array:
@@ -436,6 +456,10 @@ def make_hf_solver(config: HFConfig) -> Callable:
         dens0: Array,
         guess_vecs0: Array,
     ) -> HFResult:
+        h1, v2_val, w3_val, dens0, guess_vecs0 = _promote_hf_float_inputs(
+            h1, v2_val, w3_val, dens0, guess_vecs0
+        )
+
         return _primal_scf_solve(
             h1,
             v2_idx,
@@ -460,6 +484,9 @@ def solve_hf_unrolled(
     guess_vecs0: Array,
     config: HFConfig,
 ) -> HFResult:
+    h1, v2_val, w3_val, dens0, guess_vecs0 = _promote_hf_float_inputs(
+        h1, v2_val, w3_val, dens0, guess_vecs0
+    )
 
     @jax.checkpoint
     def step(carry, _):
@@ -537,6 +564,13 @@ def validate_hf_result(
 def prepare_inputs(op1, op2, op3, dens, sm: Optional[ShardingManager] = None):
     has_three_body = op3 is not None and len(op3) > 0
 
+    if has_three_body:
+        w3_idx = op3.indices
+        w3_val = op3.values
+    else:
+        w3_idx = jnp.empty((0, 6))
+        w3_val = jnp.empty((0, ))
+
     if sm is not None:
         if sm.num_nodes != 1 and sm.num_gpus != 1:
             raise ValueError(
@@ -546,23 +580,16 @@ def prepare_inputs(op1, op2, op3, dens, sm: Optional[ShardingManager] = None):
         dens_array = sm.prepare(dens, rank=0)
         v2_idx = sm.prepare(op2.indices)
         v2_val = sm.prepare(op2.values)
-        if has_three_body:
-            w3_idx = sm.prepare(op3.indices)
-            w3_val = sm.prepare(op3.values)
-        else:
-            w3_idx = None
-            w3_val = None
+        w3_idx = sm.prepare(w3_idx)
+        w3_val = sm.prepare(w3_val)
+
     else:
         h1 = jnp.asarray(op1.to_dense())
         dens_array = jnp.asarray(dens)
         v2_idx = jnp.asarray(op2.indices, dtype=jnp.int32)
         v2_val = jnp.asarray(op2.values)
-        if has_three_body:
-            w3_idx = jnp.asarray(op3.indices, dtype=jnp.int32)
-            w3_val = jnp.asarray(op3.values)
-        else:
-            w3_idx = None
-            w3_val = None
+        w3_idx = jnp.asarray(w3_idx, dtype=jnp.int32)
+        w3_val = jnp.asarray(w3_val)
 
     return h1, v2_idx, v2_val, w3_idx, w3_val, dens_array
 
@@ -602,6 +629,7 @@ def solve_HF(
     result = jax.jit(make_hf_solver(config))(
         h1, v2_idx, v2_val, w3_idx, w3_val, dens0, guess0
     )
+    # result = solve_hf_implicit(h1, v2_idx, v2_val, w3_idx, w3_val, dens0, guess0, config)
     return (
         float(jax.device_get(result.energy)),
         result.orbitals,
@@ -771,6 +799,9 @@ def make_implicit_hf_solver(config: HFConfig) -> Callable:
         init_dens: Array,
         init_vecs: Array,
     ) -> HFResult:
+
+        h1, v2_val, w3_val, init_dens, init_vecs = _promote_hf_float_inputs(h1, v2_val, w3_val, init_dens, init_vecs)
+
         dens, warm_orbitals, iterations, _, energy_change = implicit_density(
             h1, v2_idx, v2_val, w3_idx, w3_val, init_dens, init_vecs
         )

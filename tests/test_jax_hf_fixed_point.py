@@ -112,3 +112,29 @@ def test_validation_checks_projector_and_eigenproblem_invariants():
     assert checks.orbital_residual < 5.0e-6
     assert checks.energy_error < 1.0e-7
  
+def test_mixed_input_dtypes_are_promoted_before_compiled_loop():
+    if not jax.config.x64_enabled:
+        return
+
+    h1 = jnp.diag(jnp.array([-1.0, 1.0], dtype=jnp.float64))
+    dens0 = jnp.diag(jnp.array([1.0, 0.0], dtype=jnp.float32))
+    guess0 = dens0[:, :1]
+    v2_idx = jnp.zeros((0, 4), dtype=jnp.int32)
+    v2_val = jnp.zeros((0,), dtype=jnp.float64)
+    w3_idx = jnp.zeros((0, 6), dtype=jnp.int32)
+    w3_val = jnp.zeros((0,), dtype=jnp.float64)
+    config = HFConfig(
+        npart=1,
+        mix=0.7,
+        density_tol=1.0e-10,
+        energy_tol=1.0e-10,
+        scf_max_iter=10,
+        eigensolver="dense",
+    )
+
+    result = jax.jit(make_hf_solver(config))(
+        h1, v2_idx, v2_val, w3_idx, w3_val, dens0, guess0
+    )
+
+    assert result.density.dtype == jnp.float64
+    assert jnp.allclose(result.energy, -1.0, atol=1.0e-12)
