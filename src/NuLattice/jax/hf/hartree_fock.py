@@ -107,11 +107,11 @@ def _hf_iter(
     fock = build_fock(h1, gamma, omega)
     energy = hf_energy(dens, h1, gamma, omega)
 
-    if diagonalizer == "dense":
-        _, orbitals = jnp.linalg.eigh(fock)
-    else:
-        _, orbitals = davidson_eigh(fock, npart, prev_vecs, davidson_max_iter)
-
+    _, orbitals = (
+        jnp.linalg.eigh(fock)
+        if diagonalizer == "dense"
+        else davidson_eigh(fock, npart, prev_vecs, davidson_max_iter)
+    )
     occ = orbitals[:, :npart]
 
     new_density = occ @ _adjoint(occ)
