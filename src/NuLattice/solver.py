@@ -204,7 +204,8 @@ class HFSolver(BaseSolver):
         davidson_max_iter: int = 10,
         verbose: bool = False,
         sm: ShardingManager = None,
-        diagonalizer="davidson"
+        diagonalizer="davidson",
+        keep_all_orbitals=False,
     ):
         if self.backend == "cpu":
             import NuLattice.cpu.hf.hartree_fock as hf
@@ -230,6 +231,7 @@ class HFSolver(BaseSolver):
                 sm=sm,
                 diagonalizer=diagonalizer,
                 davidson_max_iter=davidson_max_iter,
+                keep_all_orbitals=keep_all_orbitals,
             )
         else:
             energy, vecs, conv = hf.solve_HF(

@@ -27,6 +27,7 @@ def parse():
     parser.add_argument("--backend", type=str, default="cpu", help="backend")
     parser.add_argument("--shard", action="store_true", default=False, help="Enable JAX sharding")
     parser.add_argument("--diagonalizer", type=str, default="davidson", help="Use the dense solver")
+    parser.add_argument("--keep_all_orbitals", action="store_true", default=False, help="keep all orbitals or just the occupied ones. Defaults to occupied only")
 
     args = parser.parse_args()
     return args
@@ -66,7 +67,7 @@ def main():
         tracemalloc.start()
 
     start = time.perf_counter()
-    erg, trafo, conv = solver.solve(eps=args.eps, mix=args.mix, max_iter=args.max_iter, davidson_max_iter=args.davidson_max_iter, verbose=args.verbose, sm=sm, diagonalizer=args.diagonalizer)
+    erg, trafo, conv = solver.solve(eps=args.eps, mix=args.mix, max_iter=args.max_iter, davidson_max_iter=args.davidson_max_iter, verbose=args.verbose, sm=sm, diagonalizer=args.diagonalizer, keep_all_orbitals=args.keep_all_orbitals)
     end = time.perf_counter()
     print("warm start:", end - start)
 

@@ -162,6 +162,7 @@ def solve_HF(
     verbose: bool = False,
     sm: ShardingManager = None,
     diagonalizer: EigenSolver = "davidson",
+    keep_all_orbitals: bool = True,
 ):
 
     if diagonalizer not in {"davidson", "dense"}:
@@ -194,7 +195,14 @@ def solve_HF(
 
         prev_energy = energy
 
-    return energy, occ, converged
+    if keep_all_orbitals:
+        gamma, omega = build_mean_fields(_dens, v2_idx, v2_val)
+        fock = build_fock(h1_dense, gamma, omega)
+        _, orbs = jnp.linalg.eigh(fock)
+    else:
+        orbs = occ
+
+    return energy, orbs, converged
 
 def occupied_orbitals_from_diagonal_density(dens: jax.Array, npart: int) -> jax.Array:
     indices = jnp.argsort(jnp.real(jnp.diag(dens)))[-npart:]
