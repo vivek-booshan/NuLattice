@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from NuLattice.utils._jax_types import ShardingManager
 
-from .subspace_solver import _occupied_orbitals
+from .davidson import davidson_eigh
 
 Array = jax.Array
 EigenSolver = Literal["dense", "davidson"]
@@ -99,7 +99,7 @@ def hf_energy(
 
 
 @partial(jax.jit, static_argnames=("npart", "diagonalizer", ))
-def _scf_step(
+def _hf_iter(
     dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs,
     diagonalizer, davidson_max_iter
 ):
@@ -109,9 +109,10 @@ def _scf_step(
 
     if diagonalizer == "dense":
         _, orbitals = jnp.linalg.eigh(fock)
-        occ = orbitals[:, :npart]
     else:
-        _, occ = _occupied_orbitals(fock, npart, prev_vecs, davidson_max_iter)
+        _, orbitals = davidson_eigh(fock, npart, prev_vecs, davidson_max_iter)
+
+    occ = orbitals[:, :npart]
 
     new_density = occ @ _adjoint(occ)
 
@@ -177,7 +178,7 @@ def solve_HF(
     occ = occupied_orbitals_from_diagonal_density(_dens, npart)
 
     for i in range(max_iter):
-        occ, energy, _dens, diff_dens = _scf_step(
+        occ, energy, _dens, diff_dens = _hf_iter(
             _dens, h1_dense, v2_idx, v2_val, w3_idx, w3_val, npart, mix, occ,
             diagonalizer, davidson_max_iter,
         )
@@ -187,7 +188,6 @@ def solve_HF(
         if verbose:
             print(f"Iter {i}: E={energy:.8f}, dE={dE:.6e}, dRho={diff_dens:.6e}")
 
-        # if (diff_dens < eps or dE < eps) and i > 1:
         if (diff_dens < eps):
             converged = True
             break

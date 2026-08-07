@@ -59,8 +59,7 @@ def davidson_eigh(H: Array, npart: int, guess_vecs: Array, max_iter: int):
         V_sub, _ = state
 
         # Project into subspace: M = VT H V -> (2k, 2k)
-        HV = jnp.dot(H, V_sub)
-        M = jnp.dot(_adjoint(V_sub), HV)
+        M = _adjoint(V_sub) @ (H @ V_sub)
 
         # local eigen solution
         vals, evecs = jnp.linalg.eigh(M)
@@ -68,8 +67,8 @@ def davidson_eigh(H: Array, npart: int, guess_vecs: Array, max_iter: int):
         best_vals = vals[:npart]
         best_evecs = evecs[:, :npart]
 
-        X = jnp.dot(V_sub, best_evecs)
-        HX = jnp.dot(H, X)
+        X = V_sub @ best_evecs
+        HX = H @ X
         R = HX - X * best_vals[None, :]
 
         # preconditioner: (D - energy)^{-1} * R
@@ -87,7 +86,7 @@ def davidson_eigh(H: Array, npart: int, guess_vecs: Array, max_iter: int):
     final_V, final_vals = jax.lax.fori_loop(0, max_iter, body_fun, (V, initial_vals))
 
     # Final extraction of the converged vectors
-    final_M = jnp.dot(_adjoint(final_V), jnp.dot(H, final_V))
+    final_M = _adjoint(final_V) @ (H @ final_V)
     _, final_evecs = jnp.linalg.eigh(final_M)
     vecs_out = jnp.dot(final_V, final_evecs[:, :npart])
 
