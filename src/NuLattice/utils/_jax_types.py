@@ -6,6 +6,7 @@ from jax.experimental.sparse import BCOO
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 
+@jax.tree_util.register_pytree_node_class
 class Operator:
     def __init__(self, indices: jnp.ndarray, values: jnp.ndarray, nstat: int):
         self.nstat = nstat
@@ -15,6 +16,18 @@ class Operator:
 
         if self.indices.ndim == 1:
             self.indices = self.indices[:, jnp.newaxis]
+
+    def tree_flatten(self):
+        children = (self.indices, self.values)
+        aux_data = (self.nstat, )
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        indices, values = children
+        (nstat,) = aux_data
+        return cls(indices, values, nstat)
+
 
     def __len__(self):
         return len(self.values)
@@ -76,6 +89,7 @@ class Operator:
         return cls(indices, values, nstat)
 
 
+@jax.tree_util.register_pytree_node_class
 class OneBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
         super().__init__(indices, values, nstat)
@@ -86,6 +100,7 @@ class OneBodyOperator(Operator):
     def _get_expected_rank(cls):
         return 2
 
+@jax.tree_util.register_pytree_node_class
 class TwoBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
         super().__init__(indices, values, nstat)
@@ -96,6 +111,7 @@ class TwoBodyOperator(Operator):
     def _get_expected_rank(cls):
         return 4
 
+@jax.tree_util.register_pytree_node_class
 class ThreeBodyOperator(Operator):
     def __init__(self, indices, values, nstat):
         super().__init__(indices, values, nstat)
