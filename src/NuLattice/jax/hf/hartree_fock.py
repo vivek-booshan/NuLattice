@@ -24,7 +24,7 @@ def init_density(nstat: int, hole: Tuple[int], dtype=None):
     return dens
 
 @jax.jit
-def contract_2nf_fused(indices: Array, values: Array, dens: Array) -> Array:
+def _contract_2nf_fused(indices: Array, values: Array, dens: Array) -> Array:
     """Contract the sparse two-body interaction with a one-body density."""
     p, q, r, s = (indices[:, i] for i in range(4))
     n = dens.shape[0]
@@ -38,7 +38,7 @@ def contract_2nf_fused(indices: Array, values: Array, dens: Array) -> Array:
 
 
 @jax.jit
-def contract_3nf_fused(indices: Array, values: Array, dens: Array) -> Array:
+def _contract_3nf_fused(indices: Array, values: Array, dens: Array) -> Array:
     """Contract the sparse three-body interaction with two densities."""
     a, b, c, d, e, f = (indices[:, i] for i in range(6))
     n = dens.shape[0]
@@ -66,10 +66,10 @@ def build_mean_fields(
     w3_idx: Array = None,
     w3_val: Array = None,
 ) -> tuple[Array, Array]:
-    gamma = hermitianize(contract_2nf_fused(v2_idx, v2_val, dens))
+    gamma = hermitianize(_contract_2nf_fused(v2_idx, v2_val, dens))
     omega = None
     if (w3_idx is not None) and (w3_val is not None):
-        omega = hermitianize(contract_3nf_fused(w3_idx, w3_val, dens))
+        omega = hermitianize(_contract_3nf_fused(w3_idx, w3_val, dens))
     return gamma, omega
 
 
@@ -98,7 +98,7 @@ def hf_energy(
 
 
 
-@partial(jax.jit, static_argnames=("npart", "diagonalizer", ))
+@partial(jax.jit, static_argnames=("npart", "diagonalizer"))
 def _hf_iter(
     dens, h1, v2_idx, v2_val, w3_idx, w3_val, npart, mix, prev_vecs,
     diagonalizer, davidson_max_iter
@@ -122,31 +122,28 @@ def _hf_iter(
     return occ, energy, mixed_density, residual_density
 
 def prepare_inputs(op1, op2, op3, dens: Array, sm: ShardingManager, dtype=jnp.float64):
+
     has_three_body = op3 is not None and len(op3) > 0
+    if has_three_body:
+        w3_idx, w3_val = op3.indices, op3.values
+    else:
+        w3_idx = jnp.empty((0, 6), dtype=jnp.int32)
+        w3_val = jnp.empty((0, ), dtype=dtype)
 
     if sm is not None:
         assert sm.num_nodes == 1 or sm.num_gpus == 1, "HF expects 1D mesh, ensure sm.num_nodes or sm.num_gpus is 1"
-        h1 = sm.prepare(op1.to_dense(), rank=0)
-        dens = sm.prepare(dens, rank=0)
-        v2_idx = sm.prepare(op2.indices)
-        v2_val = sm.prepare(op2.values)
-        if has_three_body:
-            w3_idx = sm.prepare(op3.indices)
-            w3_val = sm.prepare(op3.values)
-        else:
-            w3_idx = None
-            w3_val = None
+        h1 = sm.prepare(op1.to_dense())
+        dens = sm.prepare(dens)
+        v2_idx = sm.prepare(op2.indices, rank=0)
+        v2_val = sm.prepare(op2.values, rank=0)
+        w3_idx = sm.prepare(w3_idx, rank=0)
+        w3_val = sm.prepare(w3_val, rank=0)
     else:
-        h1 = jnp.asarray(op1.to_dense())
-        v2_idx = jnp.asarray(op2.indices)
-        v2_val = jnp.asarray(op2.values)
-        if has_three_body:
-            w3_idx = jnp.asarray(op3.indices)
-            w3_val = jnp.asarray(op3.values)
-        else:
-            w3_idx = None
-            w3_val = None
-        dens = jnp.asarray(dens)
+        h1 = jnp.asarray(op1.to_dense(), dtype=dtype)
+        v2_idx = jnp.asarray(op2.indices, dtype=jnp.int32)
+        v2_val = jnp.asarray(op2.values, dtype=dtype)
+        w3_idx = jnp.asarray(op3.indices, dtype=jnp.int32)
+        w3_val = jnp.asarray(op3.values, dtype=dtype)
 
     return h1, v2_idx, v2_val, w3_idx, w3_val, dens
 
@@ -163,13 +160,14 @@ def solve_HF(
     sm: ShardingManager = None,
     diagonalizer: EigenSolver = "davidson",
     keep_all_orbitals: bool = True,
+    dtype=jnp.float64
 ):
 
     if diagonalizer not in {"davidson", "dense"}:
         raise ValueError("diagonalizer must be 'davidson' or 'dense'")
 
     h1_dense, v2_idx, v2_val, w3_idx, w3_val, _dens = prepare_inputs(
-        op1, op2, op3, dens, sm
+        op1, op2, op3, dens, sm, dtype
     )
 
     prev_energy = 0.0
