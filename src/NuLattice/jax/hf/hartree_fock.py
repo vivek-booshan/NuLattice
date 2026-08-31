@@ -116,8 +116,8 @@ def _hf_iter(
 
     new_density = occ @ _adjoint(occ)
 
-    residual_density = jnp.sum(jnp.abs(new_density - dens))
     mixed_density = (1.0 - mix) * dens + mix * new_density
+    residual_density = jnp.sum(jnp.abs(mixed_density - dens))
 
     return occ, energy, mixed_density, residual_density
 
